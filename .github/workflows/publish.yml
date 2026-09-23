@@ -1,0 +1,237 @@
+name: publish
+
+# Builds the production image (deploy/Dockerfile: one static Go binary) and
+# pushes it to GHCR. construct-server pulls ghcr.io/einlanzerous/trestle.
+# `main` publishes :latest and a short-sha tag; release-please's v* tags
+# publish the semver tags.
+#
+# Modeled on catenary's publish.yml (itself modeled on chronicle's), because
+# both were opened to close the exact gap this repo starts without: a
+# service whose CLAUDE.md promises "Release-please + GHCR image ..." from day
+# one but whose image nothing has ever built. CANT-16 could not deploy for
+# that reason; this workflow exists so Trestle never reaches that state.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+# Two merges to main in quick succession would otherwise race on :latest with
+# no ordering guarantee, and the loser silently wins. NOT cancel-in-progress:
+# a half-pushed manifest is worse than a slow queue, and the tag path must
+# never be cancelled by a subsequent main push.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: build and push
+    runs-on: ubuntu-latest
+    outputs:
+      # Consumed by `smoke` below, which verifies the artefact THIS job
+      # pushed rather than a rebuild of the same source.
+      digest: ${{ steps.build.outputs.digest }}
+      stamp: ${{ steps.ver.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The job's own token. Publishing needs no secret of its own — that is
+          # what `permissions: packages: write` above is for.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: ver
+        # Resolve, ONCE and from the ref, the version this build may claim.
+        # The shape chronicle, catenary, purser and lyceum share (SERV-154,
+        # LYCM-121).
+        #
+        # `stamp` is what the binary is built with AND what type=semver puts
+        # in org.opencontainers.image.version — so on a release `trestle
+        # version` and the image label agree by construction. The delivery
+        # ledger compares them with STRICT EQUALITY, and a disagreement is a
+        # permanently unresolvable row.
+        #
+        #   (push to main)  -> ""            no version to claim -> `dev`
+        #   v1.4.0          -> 1.4.0         a release
+        #   v1.5.0-rc.1     -> 1.5.0-rc.1    prerelease. type=semver DOES
+        #                                    match and labels the image, so
+        #                                    the binary must say the same
+        #                                    thing.
+        #   vnext           -> ""            not semver; type=semver does not
+        #                                    match, so there is no label to
+        #                                    agree with, and :sha-<short>
+        #                                    below turns back on so the build
+        #                                    still has a tag to push.
+        #
+        # Inputs arrive by env, not by ${{ }} interpolation into the script: a
+        # run block that pastes a ref name inline executes whatever it
+        # contains.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          stamp=""
+          # The SemVer 2.0.0 regex from semver.org, translated to POSIX ERE,
+          # because this has to agree with node-semver EXACTLY. A looser
+          # pattern reopens the bug in a narrower band: a shape this accepts
+          # but `semver.valid()` rejects sets `stamp`, which turns the
+          # :sha-<short> fallback OFF, while metadata-action emits no tag at
+          # all — and build-push-action cannot push an empty tag list.
+          # Leading zeros and empty dot-separated identifiers are the two
+          # rules doing the work.
+          SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+          if [ "$REF_TYPE" = tag ]; then
+            candidate="${REF_NAME#v}"
+            if printf '%s' "$candidate" | grep -qE "$SEMVER"; then
+              # Build metadata is dropped rather than stamped. A Docker tag
+              # cannot contain `+`, so metadata-action emits `1.2.3` for
+              # `v1.2.3+build.5`; stamping the `+build.5` form would disagree
+              # with the label it is compared against.
+              stamp="${candidate%%+*}"
+            else
+              echo "::warning::tag $REF_NAME is not semver; publishing :sha-<short> and stamping no version"
+            fi
+          fi
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/einlanzerous/trestle
+          # latest=false. The default `latest=auto` emits :latest BY ITSELF on
+          # any type=semver match, independently of the type=raw entry below — so
+          # a release, which is pushed to main AND then tagged, publishes :latest
+          # twice: once from the main build (VERSION blank, binary reporting
+          # `dev`) and once from the tag build. Two runs, two digests, one moving
+          # tag, no ordering between them. It fired on purser with the bad
+          # outcome (SERV-108).
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Gated on the VALIDATED version rather than on is_default_branch.
+            # Release-please tags the release PR's MERGE COMMIT, so the main push
+            # and the v* tag build see the same github.sha — with no restriction
+            # both runs push sha-<short>, one reporting `dev` and one reporting
+            # the semver, and the last writer wins non-deterministically. compose
+            # reads ${TRESTLE_TAG:-latest}, so pinning a sha tag is expected
+            # usage rather than hypothetical.
+            type=sha,format=short,enable=${{ steps.ver.outputs.stamp == '' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # VERSION is the validated `stamp`, NOT steps.meta.outputs.version.
+          # That output is just the highest-priority tag that matched, so it
+          # silently becomes `latest` or `sha-<short>` — and stamping either puts
+          # a moving tag into the delivery ledger as an identity, to disagree
+          # with the label for ever.
+          #
+          # On main `stamp` is empty, which the binary maps to "dev" — the
+          # honest answer for a build no release cut. The Dockerfile defaults
+          # both ARGs to empty for the same reason.
+          #
+          # GIT_SHA is passed on both paths: a main build has a real commit and
+          # should say so, it just has no release to name.
+          build-args: |
+            VERSION=${{ steps.ver.outputs.stamp }}
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke:
+    name: the published image answers /healthz
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    # The published image is what actually deploys; a local `docker build` is
+    # evidence about the Dockerfile and no evidence about the artefact GHCR
+    # holds. Trestle has no database, so unlike catenary's/chronicle's version
+    # of this job there is no Postgres service container here — /readyz only
+    # checks that TRESTLE_DATA_DIR is writable, which a container with no
+    # mounted volume already satisfies via the image's own VOLUME /data.
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: run the pushed digest and probe it
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+          STAMP: ${{ needs.image.outputs.stamp }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/einlanzerous/trestle@${DIGEST}"
+          echo "probing $IMAGE"
+
+          # A syntactically valid (64 hex chars) but unusable token. Nothing
+          # in this smoke test exercises /v1/uploads, so the value only has
+          # to satisfy TRESTLE_TOKENS' name=sha256hex shape at boot.
+          TOKEN_HASH=$(printf '0%.0s' {1..64})
+
+          docker run -d --name trestle-smoke --network host \
+            -e TRESTLE_PORT=4014 \
+            -e TRESTLE_PUBLIC_BASE_URL=http://localhost:4014 \
+            -e TRESTLE_TOKENS="smoke=${TOKEN_HASH}" \
+            "$IMAGE"
+
+          # The compose healthcheck command, verbatim. If the runtime stage
+          # ever loses busybox — a move to scratch or distroless — this is
+          # what goes red, here, instead of leaving every deploy stuck
+          # `unhealthy`.
+          ok=""
+          for _ in $(seq 1 30); do
+            if docker exec trestle-smoke wget -qO- http://localhost:4014/healthz > healthz.json 2>/dev/null; then
+              ok=1; break
+            fi
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "::error::/healthz never answered in the published image"; exit 1; }
+          cat healthz.json; echo
+          grep -q '"status":"ok"' healthz.json
+
+          # /readyz checks TRESTLE_DATA_DIR is writable, which also proves the
+          # container is running as a user that can write /data — the
+          # non-root `trestle` user the Dockerfile creates and chowns /data to.
+          docker exec trestle-smoke wget -qO- http://localhost:4014/readyz | tee readyz.json; echo
+          grep -q '"status":"ok"' readyz.json
+
+          # On a RELEASE, the binary's reported version must equal the validated
+          # stamp — which is also what metadata-action put in the image label.
+          # The delivery ledger compares those two with strict equality, so a
+          # disagreement here is a permanently unresolvable row. On a main build
+          # STAMP is empty and the honest answer is `dev`.
+          reported=$(grep -o '"version":"[^"]*"' healthz.json | head -1 | cut -d'"' -f4)
+          echo "binary reports: $reported"
+          if [ -n "$STAMP" ]; then
+            [ "$reported" = "$STAMP" ] || {
+              echo "::error::published image reports '$reported' but was stamped '$STAMP'"; exit 1; }
+          else
+            [ "$reported" = "dev" ] || {
+              echo "::error::an unstamped build reports '$reported', want 'dev'"; exit 1; }
+          fi
+
+      - name: container logs on failure
+        if: failure()
+        run: docker logs trestle-smoke || true

@@ -1,0 +1,93 @@
+name: ci
+
+# Build, vet, test, and lint. No database, no ffmpeg, no web build — Trestle
+# is stdlib net/http and local disk only, and CLAUDE.md's Testing section is
+# explicit that everything runs against a temp dir and httptest, no external
+# services. So unlike Chronicle's ci.yml (which this is modeled on) there is
+# no service container, no generated-code staleness guard, and no separate
+# web job — none of those things exist in this repo.
+#
+# This repo is PUBLIC, so GitHub-hosted `ubuntu-latest` minutes are free
+# (2,000 included minutes/month is the private-repo limit; a public repo is
+# unmetered). That is also why this does not reach for a self-hosted runner
+# the way switchyard's ci.yml does — self-hosting switchyard was a response
+# to switchyard being private and this workflow being 68% of that account's
+# Actions bill (SWY-293). Nothing here needs a runner of its own.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./... -count=1
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+      # The expression half of the workflow-file check; gofmt/go vet/lint
+      # above are the Go-code half. A workflow with a broken expression can
+      # sit green through every other job and fail silently at the one place
+      # nothing else looks (switchyard's ci.yml carries the same step for the
+      # same reason — SWY-416 #373).
+      #
+      # Downloaded PINNED and checksummed, not read off the runner: an
+      # unversioned host binary can turn an unrelated PR red the day
+      # actionlint's own defaults change underneath it. Same artifact
+      # switchyard's ci.yml pins (v1.7.12, linux_amd64), so the checksum
+      # below is the same published file's, not a fresh one.
+      #
+      # Unlike switchyard, this job only ever runs on ubuntu-latest — there
+      # is no self-hosted/fork-fallback split here — so there is no reason to
+      # disable actionlint's shellcheck pass-through the way switchyard does:
+      # ubuntu-latest ships shellcheck, and running with it gives a bit more
+      # coverage over the `run:` blocks in these workflows for free.
+      - name: Workflow lint (actionlint)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/actionlint.tgz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"

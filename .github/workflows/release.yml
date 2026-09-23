@@ -1,0 +1,50 @@
+name: Release Please
+
+# Automated releases. Release Please watches conventional commits on main and
+# maintains a release PR (version bump + CHANGELOG). Merging that PR creates
+# the tag and the GitHub Release; publish.yml then builds the semver image
+# from the v* tag. No hand-cut tags.
+#
+# CLAUDE.md requires conventional commits and puts the `feat:`/`fix:` prefix
+# in the commit message rather than the branch name (PRINCIPLES §3) — this
+# workflow is the reason that distinction matters: release-please reads the
+# commit, and the branch name is invisible to it.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Mint a short-lived installation token from the GitHub App so the release
+      # PR and tag are created by the App identity rather than the default
+      # GITHUB_TOKEN.
+      #
+      # This is load-bearing, not cosmetic. Events raised by GITHUB_TOKEN do not
+      # trigger other workflows (GitHub's anti-recursion safeguard), so a release
+      # PR opened by it would never run its own required checks, and the tag it
+      # eventually pushed would never reach publish.yml — leaving a release with
+      # no image. The App-minted token is what closes both.
+      #
+      # RELEASE_BOT_APP_ID / RELEASE_BOT_PRIVATE_KEY are Signet-managed from the
+      # `imperium-loop` project, fanned out to every releasing repo. Matches the
+      # switchyard / lyceum / purser / chronicle / catenary setup.
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

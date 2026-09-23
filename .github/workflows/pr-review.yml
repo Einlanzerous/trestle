@@ -1,0 +1,80 @@
+name: PR Review
+
+# Fresh-context review of every pull request, via the shared definition in
+# construct-server (SERV-92). It runs in CI so it structurally cannot share
+# context with whatever wrote the code, and so it fires whether or not
+# anyone remembers to ask (SERV-59).
+#
+# Judgement lives in `REVIEW.md`; generated artifacts (there are none of
+# consequence yet) in `.github/review-ignore`. The procedure itself is
+# fetched from construct-server — do not copy `review-prompt.md` here, and do
+# not add a `concurrency:` key, which the shared workflow owns. See
+# construct-server's `docs/pr-reviewer.md`, including its runner prerequisite
+# — this workflow queues silently for 24h with no red check if the repo has
+# no self-hosted runner registered yet.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+# A called workflow cannot be granted more than its caller holds, so the
+# ceiling is set here even though the shared workflow declares the same
+# three.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  pr-review:
+    uses: Einlanzerous/construct-server/.github/workflows/pr-review-reusable.yml@main
+    with:
+      # Where a mistake widens access, loses data, leaks a secret, or lets
+      # served bytes lie about what they are — enumerated rather than taken
+      # by directory, per pr-reviewer.md's SGNT-36 warning that a regex
+      # matching everything is the same as one matching nothing.
+      #
+      #   internal/api/       the HTTP surface: bearer gating on /v1/*, the
+      #                       unauthenticated /m/* path, the probes. A guard
+      #                       moved or dropped here is CLAUDE.md invariant 3.
+      #   internal/sniff/     content-type detection and the allow-list —
+      #                       invariant 2, "the client's Content-Type is
+      #                       never trusted". A bug here is what lets a PNG
+      #                       serve as HTML from the estate's origin.
+      #   internal/config/    env parsing for TRESTLE_TOKENS (name=hash),
+      #                       caps and quotas. Credential-shaped by
+      #                       definition — invariant 6.
+      #   internal/blob/      the Store interface and its local-disk
+      #                       implementation. Keyed on the content hash —
+      #                       invariant 1 — and the code that deletes bytes.
+      #   internal/index/     the record index: owners, expiry. Invariant 5
+      #                       (expiry only ever extends) lives here.
+      #   deploy/Dockerfile   the build and runtime identity: non-root user,
+      #                       VERSION/GIT_SHA handling, the base images.
+      #   .github/workflows/  CI, release and publish themselves.
+      #   .github/review-ignore
+      #                       widening this changes what the reviewer sees on
+      #                       every later PR.
+      #   REVIEW.md, CLAUDE.md
+      #                       the review's own standards and the invariants
+      #                       it enforces.
+      #   .claude/            agent-facing instructions and skills, if any
+      #                       exist — a policy change here gets the deeper
+      #                       tier for the same reason a CLAUDE.md edit does.
+      #
+      # Deliberately absent: `cmd/trestle/` beyond what's already covered by
+      # the packages it wires (composition only, no independent logic to
+      # widen), and `docs/` (prose, not code — a wrong decision doc doesn't
+      # execute).
+      sensitive_paths: '^(internal/api/|internal/sniff/|internal/config/|internal/blob/|internal/index/|deploy/Dockerfile|\.github/workflows/|\.github/review-ignore|REVIEW\.md|CLAUDE\.md|\.claude/)'
+
+      # The upstream default plus `.claude/` — a skill or instruction file
+      # under there is governance, not documentation, for the same reason
+      # CLAUDE.md and REVIEW.md are on this list rather than falling under
+      # the docs-only skip.
+      standards_files: '^(REVIEW\.md|CLAUDE\.md|PRINCIPLES\.md|\.github/review-prompt\.md|\.github/review-ignore|\.claude/.+)$'
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      switchyard_token: ${{ secrets.SWITCHYARD_REVIEWER_TOKEN }}

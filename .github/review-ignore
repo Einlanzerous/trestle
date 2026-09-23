@@ -1,0 +1,12 @@
+# Paths the PR reviewer does not read (SERV-87).
+#
+# One extended regex per line, matched against the repository-relative path
+# of every changed file. `#` comments and blank lines are ignored. The
+# shared workflow reads this from the BASE ref of the PR under review, so
+# widening it in a PR does not exempt that PR — and this file is itself in
+# `sensitive_paths`, so a PR that widens it escalates.
+
+# release-please owns this and rewrites it wholesale on every release. It is
+# also `.md`, so the docs-only rule already skips a release PR that touches
+# nothing else; this covers the case where it rides along with code.
+^CHANGELOG\.md$

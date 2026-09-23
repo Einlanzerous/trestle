@@ -1,0 +1,6 @@
+/trestle
+/bin/
+/data/
+.env
+*.test
+/coverage.out

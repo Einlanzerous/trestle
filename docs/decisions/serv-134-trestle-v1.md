@@ -141,7 +141,9 @@ but the API does not confirm who else uploaded what.
 - `HEAD` and byte ranges via `http.ServeContent`, so video seeks.
 - Headers on every hit:
   - `Content-Type` from the record.
-  - `Cache-Control: public, max-age=31536000, immutable`
+  - `Cache-Control: public, max-age=31536000, immutable` for a permanent blob;
+    a blob with a TTL caps `max-age` at the seconds remaining, so no edge or
+    browser cache outlives the origin's 404.
   - `ETag: "<sha256>"`, `Last-Modified` from `created_at`.
   - `X-Content-Type-Options: nosniff`
   - `Cross-Origin-Resource-Policy: cross-origin`, `Access-Control-Allow-Origin: *`

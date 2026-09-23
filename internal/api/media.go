@@ -68,6 +68,13 @@ func (a *api) media(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.Set("Content-Disposition", `inline; filename="`+filename+`"`)
 	}
+	// A multi-range request would be answered as multipart/byteranges, the
+	// one way ServeContent sends a Content-Type other than the record's.
+	// Single ranges are all video seeking needs, so a multi-range request
+	// gets the whole blob.
+	if strings.Contains(r.Header.Get("Range"), ",") {
+		r.Header.Del("Range")
+	}
 	http.ServeContent(w, r, "", rec.CreatedAt, f)
 }
 

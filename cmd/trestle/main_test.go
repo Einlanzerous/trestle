@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -243,6 +245,92 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("serve did not return after cancel")
+	}
+}
+
+func TestDataDirLockExcludesASecondProcess(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockDataDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockDataDir(dir); !errors.Is(err, errLocked) {
+		t.Fatalf("second lock = %v, want errLocked", err)
+	}
+
+	// runSweep refuses while serve holds the lock.
+	sum := sha256.Sum256([]byte(agentTok))
+	t.Setenv("TRESTLE_DATA_DIR", dir)
+	t.Setenv("TRESTLE_PUBLIC_BASE_URL", "https://media.example.test")
+	t.Setenv("TRESTLE_TOKENS", "agent="+hex.EncodeToString(sum[:]))
+	if err := runSweep(); err == nil || !strings.Contains(err.Error(), "serve is running") {
+		t.Fatalf("sweep beside a held lock = %v", err)
+	}
+
+	unlock()
+	if err := runSweep(); err != nil {
+		t.Fatalf("sweep after release = %v", err)
+	}
+}
+
+func TestReconcileAtBoot(t *testing.T) {
+	d := testDeps(t)
+	orphan := strings.Repeat("ab", 32)
+	orphanPath := filepath.Join(d.cfg.DataDir, "blobs", orphan[:2], orphan)
+	if err := os.MkdirAll(filepath.Dir(orphanPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphanPath, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blobless := strings.Repeat("cd", 32)
+	rec := `{"sha256":"` + blobless + `","bytes":1,"content_type":"image/png","ext":"png","created_at":"2026-09-22T00:00:00Z","expires_at":null,"owners":["agent"]}`
+	if err := os.WriteFile(filepath.Join(d.cfg.DataDir, "index", blobless+".json"), []byte(rec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Boot again over the planted state.
+	var logs bytes.Buffer
+	d, err := setup(d.cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcile(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatal("orphan blob survived reconcile")
+	}
+	if _, ok := d.index.Get(blobless, time.Now()); !ok {
+		t.Fatal("reconcile dropped a record")
+	}
+	for _, h := range []string{orphan, blobless} {
+		if !strings.Contains(logs.String(), h) {
+			t.Errorf("no warning naming %s in:\n%s", h, logs.String())
+		}
+	}
+}
+
+func TestReadyzProbesTheIndexDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	d := testDeps(t)
+	probe := func() int {
+		rec := httptest.NewRecorder()
+		d.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return rec.Code
+	}
+	if code := probe(); code != http.StatusOK {
+		t.Fatalf("readyz = %d", code)
+	}
+	indexDir := filepath.Join(d.cfg.DataDir, "index")
+	if err := os.Chmod(indexDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(indexDir, 0o750) })
+	if code := probe(); code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz with an unwritable index = %d, want 503", code)
 	}
 }
 

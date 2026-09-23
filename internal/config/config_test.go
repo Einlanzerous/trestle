@@ -72,6 +72,26 @@ func TestLoadRefusalsNameTheVariable(t *testing.T) {
 	}
 }
 
+// A value near MaxInt64 would wrap the API's cap-plus-headroom sum negative
+// and refuse every upload, so each byte count is bounded.
+func TestByteCountsAreBounded(t *testing.T) {
+	for _, variable := range []string{"TRESTLE_MAX_IMAGE_BYTES", "TRESTLE_MAX_VIDEO_BYTES", "TRESTLE_QUOTA_BYTES_PER_TOKEN"} {
+		t.Run(variable, func(t *testing.T) {
+			env := required()
+			env[variable] = "9223372036854775000"
+			setEnv(t, env)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), variable) {
+				t.Fatalf("Load() = %v, want an error naming %s", err, variable)
+			}
+			env[variable] = "1099511627776"
+			setEnv(t, env)
+			if _, err := Load(); err != nil {
+				t.Fatalf("1 TiB refused: %v", err)
+			}
+		})
+	}
+}
+
 func TestPublicBaseURL(t *testing.T) {
 	for _, bad := range []string{"media.example.test", "ftp://x", "https://x/path", "https://x?q=1", "https://"} {
 		if _, err := parseBaseURL(bad); err == nil {

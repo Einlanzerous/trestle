@@ -28,6 +28,11 @@ const (
 	DefaultQuotaBytesPerToken = 2 << 30
 	DefaultSweepInterval      = time.Hour
 	DefaultShutdownGrace      = 20 * time.Second
+
+	// MaxBytesSetting bounds every byte-count variable at 1 TiB. The API adds
+	// multipart headroom to the largest cap, and a value near MaxInt64 would
+	// wrap that sum negative and refuse every upload.
+	MaxBytesSetting = 1 << 40
 )
 
 // Token is one entry of TRESTLE_TOKENS. The service only ever holds the
@@ -195,8 +200,8 @@ func positiveBytes(name, raw string, def int64) (int64, error) {
 		return def, nil
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n < 1 {
-		return 0, fmt.Errorf("config: %s %q is not a positive byte count", name, v)
+	if err != nil || n < 1 || n > MaxBytesSetting {
+		return 0, fmt.Errorf("config: %s %q is not a byte count between 1 and %d", name, v, int64(MaxBytesSetting))
 	}
 	return n, nil
 }

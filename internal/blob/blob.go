@@ -72,10 +72,9 @@ func NewLocal(root string) (*Local, error) {
 	return l, nil
 }
 
-// PurgeTemp removes every in-flight upload. Only `serve` calls it, at boot:
-// anything in tmp then belongs to a process that no longer exists. A one-shot
-// `trestle sweep` beside a live server must not, or it would cut uploads off
-// mid-stream.
+// PurgeTemp removes every in-flight upload. Only `serve` calls it, at boot
+// and holding the data-dir lock, so anything in tmp belongs to a process that
+// no longer exists.
 func (l *Local) PurgeTemp() error {
 	entries, err := os.ReadDir(l.tmp)
 	if err != nil {
@@ -91,6 +90,31 @@ func (l *Local) PurgeTemp() error {
 
 // TempDir is where in-flight uploads live; /readyz probes writability there.
 func (l *Local) TempDir() string { return l.tmp }
+
+// Hashes lists every blob on disk, for serve's boot-time reconcile. Files
+// whose names are not a hash are not Trestle's and are left alone.
+func (l *Local) Hashes() ([]string, error) {
+	shards, err := os.ReadDir(l.blobs)
+	if err != nil {
+		return nil, fmt.Errorf("blob: %w", err)
+	}
+	var out []string
+	for _, s := range shards {
+		if !s.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(l.blobs, s.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("blob: %w", err)
+		}
+		for _, e := range entries {
+			if h := e.Name(); ValidHash(h) && h[:2] == s.Name() && e.Type().IsRegular() {
+				out = append(out, h)
+			}
+		}
+	}
+	return out, nil
+}
 
 func (l *Local) path(hash string) string {
 	return filepath.Join(l.blobs, hash[:2], hash)

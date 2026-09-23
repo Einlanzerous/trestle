@@ -132,6 +132,9 @@ in scope; nothing more. `DELETE` removes the caller's ownership; when the last
 owner is gone the blob and record are deleted. A record the caller does not
 own is **404**, not 403 — the public path already reveals existence by hash,
 but the API does not confirm who else uploaded what.
+After a `DELETE` of a permanent blob, edge and browser caches may keep
+serving it for up to a year under `immutable`; purging it is a
+Cloudflare-side action, not something the origin can force.
 
 ### `GET /m/{sha256}` and `GET /m/{sha256}.{ext}`
 
@@ -185,7 +188,11 @@ Signet already holds.
 ## Retention
 
 A timer inside `serve` (`TRESTLE_SWEEP_INTERVAL`, default 1h) deletes expired
-records and their blobs; `trestle sweep` runs one pass and exits, for ops.
+records and their blobs; `trestle sweep` runs one pass and exits, for a
+stopped service. `serve` holds an exclusive lock on `<data>/.lock` for its
+lifetime and `sweep` refuses while it is held: two processes sweeping and
+uploading one data dir can delete a blob a live upload just deduplicated
+against.
 Expiry is honoured on the serve path the moment it passes — the sweep is
 about disk, not about correctness.
 

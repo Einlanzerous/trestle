@@ -124,6 +124,18 @@ func (ix *Index) Get(hash string, now time.Time) (Record, bool) {
 	return r.clone(), true
 }
 
+// Hashes returns every record's hash, expired or not: an expired record's
+// blob is the sweep's to delete, not an orphan.
+func (ix *Index) Hashes() []string {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	out := make([]string, 0, len(ix.recs))
+	for h := range ix.recs {
+		out = append(out, h)
+	}
+	return out
+}
+
 // Owned returns owner's live records, newest first.
 func (ix *Index) Owned(owner string, now time.Time) []Record {
 	ix.mu.Lock()

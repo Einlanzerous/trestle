@@ -9,7 +9,12 @@ BIN := bin/trestle
 # so a "v" here is a permanent `claimed_not_confirmed` row. Stripping it
 # locally keeps the form identical everywhere the version is produced, which
 # is the only way that comparison stays honest.
-VERSION ?= $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | sed 's/^v//')
+#
+# Only a checkout sitting exactly on a semver tag claims a version. Anything
+# else — untagged, past a tag, no git — passes an EMPTY value, which the
+# binary reports as `dev`: `--always` would hand it a bare short sha, and a
+# plausible-looking non-version is worse than an honest `dev`.
+VERSION ?= $(shell git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null | sed 's/^v//')
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \

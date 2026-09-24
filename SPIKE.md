@@ -135,6 +135,47 @@ zone serves `/m/<hash>.png` from the edge (the reason the canonical URL
 carries the extension) is **not measured here** and is the one thing the
 post-deploy run must check. Readers of a PR mostly hit camo, not us.
 
+## 3b · Post-deploy run — the real host, 2026-09-24
+
+`trestle.zerogravity.industries` through the named tunnel, image `0.1.0`,
+after SERV-206 merged. Same PNG and MP4, uploaded over loopback from the
+Signet-rendered `~/.config/trestle/trestle.env` (consumer `claude-code`).
+
+| step | measured |
+|---|---|
+| public GET, first (edge MISS) | 0.064 s |
+| public GET, warm (edge HIT) | 0.038 s |
+| `Range: bytes=0-1023` on the MP4 through the edge | 206, 1024 bytes |
+
+Headers through the real edge, verbatim:
+
+```
+HTTP/2 200
+content-type: image/png
+cache-control: public, max-age=31536000, immutable
+cf-cache-status: HIT
+etag: "01e4d9ed…b03"
+content-disposition: inline; filename="01e4d9ed…b03.png"
+x-content-type-options: nosniff
+cross-origin-resource-policy: cross-origin
+access-control-allow-origin: *
+```
+
+**The zone caches at the edge**, which the quick tunnel could not show: the
+first fetch is `cf-cache-status: MISS`, every later one `HIT`. That is the
+reason the canonical URL carries the extension — Cloudflare's default cache
+eligibility is by extension — and it held.
+
+**Camo, again, from the real host** (comment on this PR): the Markdown image
+was rewritten to `camo.githubusercontent.com` and served `image/png` with our
+`cache-control` intact, `x-cache: MISS` then `HIT`; the MP4 link and bare URL
+stayed links. Finding 1 stands on the production path.
+
+Also confirmed live: `check-edge-auth.sh` passes with `trestle-media` as the
+third exemption (both `/m/` and `/healthz` bypass the guard, every gated host
+still 403s a spoofed Host), the serve log names the owning token on every
+hit, and `/` and `/v1/uploads` on the public host answer 404.
+
 ## 4 · Other surfaces — **not measured here**
 
 - **README:** same GitHub Markdown renderer as PR bodies and comments (shown

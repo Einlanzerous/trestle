@@ -435,6 +435,36 @@ func TestServePathMatching(t *testing.T) {
 	}
 }
 
+func TestSecondFilePartIsRefused(t *testing.T) {
+	e := newEnv(t)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "a.png")
+	_, _ = fw.Write(file(pngHead, 600, 1))
+	fw, _ = mw.CreateFormFile("file", "b.png")
+	_, _ = fw.Write(file(pngHead, 600, 2))
+	_ = mw.Close()
+	rec := e.do(http.MethodPost, "/v1/uploads", aliceTok, &body, "Content-Type", mw.FormDataContentType())
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_request" {
+		t.Fatalf("two file parts = %d %s", rec.Code, rec.Body)
+	}
+	if n := countFiles(t, e.root); n != 0 {
+		t.Fatalf("a refused upload left %d files", n)
+	}
+}
+
+// Multi-range would be answered as multipart/byteranges, a Content-Type the
+// record never had; it gets the whole blob with the record's type instead.
+func TestMultiRangeServesTheWholeBlob(t *testing.T) {
+	e := newEnv(t)
+	data := file(pngHead, 600, 4)
+	r := e.upload(aliceTok, "", data, http.StatusCreated)
+	rec := e.do(http.MethodGet, "/m/"+r.ID+".png", "", nil, "Range", "bytes=0-1,10-20")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" || !bytes.Equal(rec.Body.Bytes(), data) {
+		t.Fatalf("multi-range = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
 func TestRangeHeadAndConditional(t *testing.T) {
 	e := newEnv(t)
 	data := file(mp4Head, 5000, 7)

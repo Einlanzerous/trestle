@@ -19,6 +19,11 @@ import (
 	"github.com/Einlanzerous/trestle/internal/sniff"
 )
 
+// errSecondFile refuses a multipart body with more than one file part:
+// keeping the first and dropping the rest would answer 201 for bytes that
+// were never stored.
+var errSecondFile = errors.New("multipart body has more than one file part")
+
 // multipartSlack is headroom over the largest cap for multipart framing and
 // the ttl field, so a file exactly at the cap is not refused for its
 // envelope.
@@ -140,6 +145,10 @@ func (a *api) upload(w http.ResponseWriter, r *http.Request) {
 	// upload is recorded.
 	if mr != nil {
 		formTTL, err := trailingTTL(mr)
+		if errors.Is(err, errSecondFile) {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		if err != nil {
 			a.readFailed(w, err)
 			return
@@ -212,7 +221,10 @@ func trailingTTL(mr *multipart.Reader) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if p.FormName() == "ttl" {
+		switch p.FormName() {
+		case "file":
+			return "", errSecondFile
+		case "ttl":
 			if ttl, err = readField(p); err != nil {
 				return "", err
 			}

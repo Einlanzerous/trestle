@@ -132,6 +132,9 @@ in scope; nothing more. `DELETE` removes the caller's ownership; when the last
 owner is gone the blob and record are deleted. A record the caller does not
 own is **404**, not 403 — the public path already reveals existence by hash,
 but the API does not confirm who else uploaded what.
+After a `DELETE` of a permanent blob, edge and browser caches may keep
+serving it for up to a year under `immutable`; purging it is a
+Cloudflare-side action, not something the origin can force.
 
 ### `GET /m/{sha256}` and `GET /m/{sha256}.{ext}`
 
@@ -185,7 +188,11 @@ Signet already holds.
 ## Retention
 
 A timer inside `serve` (`TRESTLE_SWEEP_INTERVAL`, default 1h) deletes expired
-records and their blobs; `trestle sweep` runs one pass and exits, for ops.
+records and their blobs; `trestle sweep` runs one pass and exits, for a
+stopped service. `serve` holds an exclusive lock on `<data>/.lock` for its
+lifetime and `sweep` refuses while it is held: two processes sweeping and
+uploading one data dir can delete a blob a live upload just deduplicated
+against.
 Expiry is honoured on the serve path the moment it passes — the sweep is
 about disk, not about correctness.
 
@@ -198,7 +205,7 @@ year"; a caller that wants less says so.
 |---|---|---|
 | `TRESTLE_PORT` | `4014` | |
 | `TRESTLE_DATA_DIR` | — | required |
-| `TRESTLE_PUBLIC_BASE_URL` | — | required; scheme+host, no trailing slash, e.g. `https://media.zerogravity.industries` |
+| `TRESTLE_PUBLIC_BASE_URL` | — | required; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries` |
 | `TRESTLE_TOKENS` | — | required, at least one entry |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
@@ -229,14 +236,14 @@ The PR-opening flow is the caller's concern.
 - Compose block `trestle`, image `ghcr.io/einlanzerous/trestle:${TRESTLE_TAG}`,
   volume `trestle_data:/data`, **`ports: 127.0.0.1:4014:4014`** — agents run
   on the box and upload over loopback; nothing else reaches the API in v1.
-- Public serve host **`media.zerogravity.industries`** on the tunnel, router
+- Public serve host **`trestle.zerogravity.industries`** on the tunnel, router
   `trestle-media` on the `internal` entrypoint with rule
   `Host(media…) && (PathPrefix(/m/) || Path(/healthz))` and **no
   `cf-access-jwt`**: GitHub's camo proxy holds no credential. That makes it
   the third entry in `check-edge-auth.sh`'s exemption allowlist after the
   webhook path and placard, argued for there. The path restriction is what
   bounds it: `/v1/` does not exist on that host.
-- The Access-gated API host `trestle.zerogravity.industries` (browser access
+- The Access-gated API host `trestle-api.zerogravity.industries` (browser access
   to the bare index; off-box agents via an Access service token) is a
   separate SERV ticket, because it needs an Access application and an AUD
   that only exists once the application does.

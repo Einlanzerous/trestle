@@ -243,7 +243,7 @@ The PR-opening flow is the caller's concern.
   the third entry in `check-edge-auth.sh`'s exemption allowlist after the
   webhook path and placard, argued for there. The path restriction is what
   bounds it: `/v1/` does not exist on that host.
-- The Access-gated API host `trestle.zerogravity.industries` (browser access
+- The Access-gated API host `trestle-api.zerogravity.industries` (browser access
   to the bare index; off-box agents via an Access service token) is a
   separate SERV ticket, because it needs an Access application and an AUD
   that only exists once the application does.

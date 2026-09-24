@@ -23,7 +23,7 @@ TRESTLE_URL=http://127.0.0.1:4014 TRESTLE_TOKEN=… trestle upload shot.png [--t
 ```
 
 Both print the public URL, e.g.
-`https://media.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
+`https://trestle.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
 upload is permanent. `ttl` is a Go duration (`720h`) or a day count (`30d`).
 
 The same bytes always get the same URL, whoever uploads them. A later

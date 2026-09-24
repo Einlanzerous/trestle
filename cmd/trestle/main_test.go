@@ -342,3 +342,34 @@ func TestCheckWritable(t *testing.T) {
 		t.Fatal("missing dir reported writable")
 	}
 }
+
+func TestReconcileRefusesAnEmptyIndexOverBlobs(t *testing.T) {
+	d := testDeps(t)
+	var planted []string
+	for _, seed := range []string{"ab", "cd", "ef"} {
+		h := strings.Repeat(seed, 32)
+		p := filepath.Join(d.cfg.DataDir, "blobs", h[:2], h)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, png, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		planted = append(planted, p)
+	}
+	d, err := setup(d.cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An index with no records over a tree of blobs is a missing mount or a
+	// partial restore, not three crashes; the bytes must survive the boot.
+	err = reconcile(context.Background(), d)
+	if err == nil || !strings.Contains(err.Error(), "TRESTLE_DATA_DIR") {
+		t.Fatalf("reconcile over an empty index = %v, want a refusal naming TRESTLE_DATA_DIR", err)
+	}
+	for _, p := range planted {
+		if _, statErr := os.Stat(p); statErr != nil {
+			t.Fatalf("blob %s was deleted by a refused reconcile", p)
+		}
+	}
+}

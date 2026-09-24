@@ -14,7 +14,9 @@ BIN := bin/trestle
 # else — untagged, past a tag, no git — passes an EMPTY value, which the
 # binary reports as `dev`: `--always` would hand it a bare short sha, and a
 # plausible-looking non-version is worse than an honest `dev`.
-VERSION ?= $(shell git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null | sed 's/^v//')
+# Empty unless HEAD is exactly a release tag AND the tree is clean: a modified
+# checkout on v0.1.0 must not claim 0.1.0 while stamping HEAD's sha.
+VERSION ?= $(shell git diff --quiet HEAD 2>/dev/null && git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null | sed 's/^v//')
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \

@@ -205,7 +205,7 @@ year"; a caller that wants less says so.
 |---|---|---|
 | `TRESTLE_PORT` | `4014` | |
 | `TRESTLE_DATA_DIR` | — | required |
-| `TRESTLE_PUBLIC_BASE_URL` | — | required; scheme+host, no trailing slash, e.g. `https://media.zerogravity.industries` |
+| `TRESTLE_PUBLIC_BASE_URL` | — | required; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries` |
 | `TRESTLE_TOKENS` | — | required, at least one entry |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
@@ -236,7 +236,7 @@ The PR-opening flow is the caller's concern.
 - Compose block `trestle`, image `ghcr.io/einlanzerous/trestle:${TRESTLE_TAG}`,
   volume `trestle_data:/data`, **`ports: 127.0.0.1:4014:4014`** — agents run
   on the box and upload over loopback; nothing else reaches the API in v1.
-- Public serve host **`media.zerogravity.industries`** on the tunnel, router
+- Public serve host **`trestle.zerogravity.industries`** on the tunnel, router
   `trestle-media` on the `internal` entrypoint with rule
   `Host(media…) && (PathPrefix(/m/) || Path(/healthz))` and **no
   `cf-access-jwt`**: GitHub's camo proxy holds no credential. That makes it

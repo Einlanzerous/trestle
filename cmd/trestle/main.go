@@ -368,11 +368,22 @@ func reconcile(ctx context.Context, d deps) error {
 		recorded[h] = true
 	}
 	present := map[string]bool{}
+	var orphans []string
 	for _, h := range onDisk {
 		present[h] = true
-		if recorded[h] {
-			continue
+		if !recorded[h] {
+			orphans = append(orphans, h)
 		}
+	}
+	// An orphan is normally one or two blobs left by a crash between a record
+	// removal and its blob delete. A whole tree of them is not that: it is an
+	// index that failed to mount or a restore that brought back blobs/ alone,
+	// and deleting the bytes would turn a recoverable state into a permanent
+	// one. Refuse to boot rather than guess.
+	if len(orphans) > 0 && (len(recorded) == 0 || (len(onDisk) >= 4 && len(orphans)*2 > len(onDisk))) {
+		return fmt.Errorf("reconcile: %d of %d blobs under TRESTLE_DATA_DIR have no record; refusing to delete them — restore index/ or clear blobs/ deliberately", len(orphans), len(onDisk))
+	}
+	for _, h := range orphans {
 		d.logger.Warn("deleting orphan blob with no record", "sha256", h)
 		if err := d.blobs.Delete(ctx, h); err != nil {
 			return err

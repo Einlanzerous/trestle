@@ -22,6 +22,14 @@ or, with the env read for you:
 TRESTLE_URL=http://127.0.0.1:4014 TRESTLE_TOKEN=… trestle upload shot.png [--ttl 30d]
 ```
 
+On the box both variables are Signet-rendered into `~/.config/trestle/trestle.env`
+(consumer `claude-code`), so an agent session just does:
+
+```sh
+set -a; . ~/.config/trestle/trestle.env; set +a
+trestle upload shot.png
+```
+
 Both print the public URL, e.g.
 `https://trestle.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
 upload is permanent. `ttl` is a Go duration (`720h`) or a day count (`30d`).

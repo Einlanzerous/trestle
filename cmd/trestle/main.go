@@ -106,7 +106,7 @@ func usageText() string {
 
 usage:
   trestle serve                         run the HTTP server
-  trestle sweep                         delete expired records and blobs once, then exit
+  trestle sweep                         one sweep pass on a stopped service; refuses while serve runs
   trestle token mint --name <consumer>  print a new token to stdout, name=sha256 to stderr
   trestle token hash                    read a token on stdin, print its sha256 hex
   trestle upload <file> [--ttl 30d]     upload a file, print its public URL
@@ -153,7 +153,8 @@ func setup(cfg config.Config, logger *slog.Logger) (deps, error) {
 	if err != nil {
 		return deps{}, fmt.Errorf("TRESTLE_DATA_DIR %q: %w", cfg.DataDir, err)
 	}
-	ix, err := index.Open(filepath.Join(cfg.DataDir, "index"))
+	indexDir := filepath.Join(cfg.DataDir, "index")
+	ix, err := index.Open(indexDir)
 	if err != nil {
 		return deps{}, fmt.Errorf("TRESTLE_DATA_DIR %q: %w", cfg.DataDir, err)
 	}
@@ -167,14 +168,24 @@ func setup(cfg config.Config, logger *slog.Logger) (deps, error) {
 		Quota:         cfg.QuotaBytesPerToken,
 		Version:       buildVersion(),
 		Commit:        buildCommit(),
-		Ready:         func() error { return checkWritable(blobs.TempDir()) },
+		Ready:         func() error { return ready(blobs.TempDir(), indexDir) },
 		Now:           time.Now,
 	})
 	return deps{cfg: cfg, logger: logger, blobs: blobs, index: ix, router: router}, nil
 }
 
-// checkWritable is /readyz's probe: an upload that cannot reach tmp cannot
-// succeed, whatever else is up.
+// ready is /readyz's probe. An upload writes to tmp and then to index, and
+// one that commits its blob but cannot write its record answers 500, so both
+// have to be writable for the process to be ready.
+func ready(dirs ...string) error {
+	for _, d := range dirs {
+		if err := checkWritable(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func checkWritable(dir string) error {
 	f, err := os.CreateTemp(dir, "readyz-*")
 	if err != nil {
@@ -201,12 +212,24 @@ func runServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Held for the process lifetime, and taken before the index loads: the
+	// index lock is per-process, so this is what keeps a second process off
+	// the data dir. Released by the kernel when the process exits.
+	unlock, err := lockDataDir(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	defer unlock()
+
 	d, err := setup(cfg, logger)
 	if err != nil {
 		return err
 	}
-	// Only serve purges tmp: at boot nothing in it belongs to a live upload.
+	// With the lock held nothing in tmp belongs to a live upload.
 	if err := d.blobs.PurgeTemp(); err != nil {
+		return fmt.Errorf("TRESTLE_DATA_DIR %q: %w", cfg.DataDir, err)
+	}
+	if err := reconcile(ctx, d); err != nil {
 		return fmt.Errorf("TRESTLE_DATA_DIR %q: %w", cfg.DataDir, err)
 	}
 
@@ -283,16 +306,95 @@ func sweepOnce(ctx context.Context, d deps, now time.Time) error {
 	return err
 }
 
+// runSweep is for a stopped service; a running serve sweeps on its own timer.
+// Two processes sweeping and uploading the same data dir race: a sweep can
+// delete a blob a live upload just deduplicated against.
 func runSweep() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	unlock, err := lockDataDir(cfg.DataDir)
+	if errors.Is(err, errLocked) {
+		return errors.New("sweep: serve is running and sweeps on its own timer (TRESTLE_SWEEP_INTERVAL); stop it to sweep by hand")
+	}
+	if err != nil {
+		return fmt.Errorf("sweep: %w", err)
+	}
+	defer unlock()
 	d, err := setup(cfg, cfg.Logger(os.Stdout))
 	if err != nil {
 		return err
 	}
 	return sweepOnce(context.Background(), d, time.Now())
+}
+
+var errLocked = errors.New("the data dir is locked by another trestle process")
+
+// lockDataDir takes an exclusive flock on <data>/.lock without waiting.
+// flock locks belong to the open file description, so a second call in the
+// same process conflicts too, which is what the test relies on.
+func lockDataDir(dir string) (func(), error) {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, fmt.Errorf("TRESTLE_DATA_DIR %q: %w", dir, err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDWR|os.O_CREATE, 0o640)
+	if err != nil {
+		return nil, fmt.Errorf("TRESTLE_DATA_DIR %q: %w", dir, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errLocked
+		}
+		return nil, fmt.Errorf("TRESTLE_DATA_DIR %q: lock: %w", dir, err)
+	}
+	return func() { _ = f.Close() }, nil
+}
+
+// reconcile runs at serve boot, under the data-dir lock and before the
+// listener opens. A crash between a record's removal and its blob's (the
+// order Disown and Sweep use on purpose) leaves an orphan blob that nothing
+// would ever reclaim, so orphans are deleted. A record whose blob is gone
+// cannot be repaired here (the bytes are the key), so it is only reported:
+// /m/ answers 404 for it and a re-upload of the same bytes restores it.
+func reconcile(ctx context.Context, d deps) error {
+	onDisk, err := d.blobs.Hashes()
+	if err != nil {
+		return err
+	}
+	recorded := map[string]bool{}
+	for _, h := range d.index.Hashes() {
+		recorded[h] = true
+	}
+	present := map[string]bool{}
+	var orphans []string
+	for _, h := range onDisk {
+		present[h] = true
+		if !recorded[h] {
+			orphans = append(orphans, h)
+		}
+	}
+	// An orphan is normally one or two blobs left by a crash between a record
+	// removal and its blob delete. A whole tree of them is not that: it is an
+	// index that failed to mount or a restore that brought back blobs/ alone,
+	// and deleting the bytes would turn a recoverable state into a permanent
+	// one. Refuse to boot rather than guess.
+	if len(orphans) > 0 && (len(recorded) == 0 || (len(onDisk) >= 4 && len(orphans)*2 > len(onDisk))) {
+		return fmt.Errorf("reconcile: %d of %d blobs under TRESTLE_DATA_DIR have no record; refusing to delete them — restore index/ or clear blobs/ deliberately", len(orphans), len(onDisk))
+	}
+	for _, h := range orphans {
+		d.logger.Warn("deleting orphan blob with no record", "sha256", h)
+		if err := d.blobs.Delete(ctx, h); err != nil {
+			return err
+		}
+	}
+	for h := range recorded {
+		if !present[h] {
+			d.logger.Warn("record has no blob; /m/ will answer 404 until the bytes are uploaded again", "sha256", h)
+		}
+	}
+	return nil
 }
 
 func runToken(args []string, stdin io.Reader, stdout, stderr io.Writer) error {

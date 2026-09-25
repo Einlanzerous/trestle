@@ -23,7 +23,7 @@ TRESTLE_URL=http://127.0.0.1:4014 TRESTLE_TOKEN=… trestle upload shot.png [--t
 ```
 
 Both print the public URL, e.g.
-`https://media.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
+`https://trestle.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
 upload is permanent. `ttl` is a Go duration (`720h`) or a day count (`30d`).
 
 The same bytes always get the same URL, whoever uploads them. A later
@@ -64,7 +64,7 @@ against every owner.
 
 ```sh
 trestle serve                          # the server
-trestle sweep                          # delete expired records and blobs once, then exit
+trestle sweep                          # one sweep pass on a STOPPED service (refuses while serve runs)
 trestle token mint --name <consumer> > token   # plaintext → stdout, name=sha256 → stderr
 trestle token hash < token             # sha256 of a token Signet already holds
 trestle version
@@ -100,6 +100,7 @@ refuses the boot, and the message names the variable.
 <data>/blobs/<hh>/<sha256>   the bytes; the content hash is the only key
 <data>/index/<sha256>.json   the record: type, ext, owners, expiry
 <data>/tmp/                  in-flight uploads; purged when serve boots
+<data>/.lock                 held by serve for its lifetime; keeps a second process out
 ```
 
 Every write is a temp file plus a rename. A backup is a `tar` of the data dir.

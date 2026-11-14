@@ -372,6 +372,13 @@ func lockDataDir(dir string) (func(), error) {
 // would ever reclaim, so orphans are deleted. A record whose blob is gone
 // cannot be repaired here (the bytes are the key), so it is only reported:
 // /m/ answers 404 for it and a re-upload of the same bytes restores it.
+//
+// Since GENZO-30 an upload is answered 201 only after its blob and record are
+// both durable, so an orphan is never a blob a caller was told was stored:
+// it is a removal interrupted after its record went, a lost blob unlink, or
+// an upload that failed (or lost power) before its record was written and
+// was never acknowledged. Index loss is the exception, and the bulk guard
+// below covers it.
 func reconcile(ctx context.Context, d deps) error {
 	onDisk, err := d.blobs.Hashes()
 	if err != nil {

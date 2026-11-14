@@ -131,7 +131,11 @@ first private instance is `trestle-genzo`, the photo library's store.
 <data>/.lock                 held by serve for its lifetime; keeps a second process out
 ```
 
-Every write is a temp file plus a rename. A backup is a `tar` of the data dir.
+Every write is a temp file plus a rename. A 201 is answered only once the
+blob and its record, file and directory entries both, are fsynced: an upload
+the service has acknowledged survives a power loss on a filesystem that
+honours `fsync` (see the design of record, "Durability of a 201"). A backup
+is a `tar` of the data dir.
 
 ## Development
 

@@ -74,6 +74,48 @@ type Store interface {
 Writes are temp-file + `rename`, so a crash mid-upload leaves nothing
 half-written where a reader could find it.
 
+**Durability of a 201 (GENZO-30).** When `POST /v1/uploads` answers 201, the
+upload survives a power loss or kernel crash, on a filesystem that honours
+`fsync` (ext4, xfs, btrfs on Linux, with the drive's write cache flushed
+on `fsync` as the kernel does by default). Before `Add` returns, in this
+order:
+
+1. the temp file holding the bytes is fsynced;
+2. the first time a process uses a shard, `blobs/<hh>` is created if needed
+   and `blobs/` is fsynced (a shard found on disk may have been created by a
+   process that died before syncing it);
+3. the temp file is renamed to `blobs/<hh>/<sha256>` and `blobs/<hh>` is
+   fsynced, also when the blob was already there (a process that died
+   between its rename and that fsync may have left it);
+4. the record is written to a temp file in `index/`, fsynced, renamed to
+   `<sha256>.json`, and `index/` is fsynced.
+
+A rename or unlink is only durable once its directory is fsynced; fsyncing
+the file is not enough. A 200/201 that changed no record (the same owner
+re-uploading the same bytes) writes nothing to `index/`: the record in
+memory is always one that is already durable, because memory changes only
+after the fsync succeeds, and `index.Open` fsyncs `index/` once at boot (a
+dead process may have left a renamed but unsynced record). A failed fsync
+fails the request with 500 and leaves memory at the old state, so a retry
+writes and syncs again.
+
+**Removals.** `DELETE` of the last owner and the sweep unlink the record,
+fsync `index/` (the sweep once for all the records it removes), and only
+then delete the blob. The blob unlink is not fsynced: a lost one brings back
+a record-less blob, which the boot reconcile reclaims, never a record
+without its blob. `tmp/` is never fsynced; serve purges it at boot.
+`<data>` itself is not fsynced into its parent: it is expected to be a
+volume that already exists. `blobs/`, `tmp/` and `index/` are made durable
+in `<data>` at boot.
+
+Not covered: a filesystem or device that lies about `fsync` (some
+consumer SSDs without power-loss protection, `nobarrier`/`data=writeback`
+mounts with a volatile cache, network filesystems), and corruption of bytes
+already on disk. The cost, measured with `BenchmarkUpload` on ext4 over LVM
+on NVMe: a 64 KiB upload goes from about 1.4 ms to 2.7 to 3.3 ms (two
+directory fsyncs in the steady state); a 4 MiB upload, about 12 ms either
+way, is dominated by the file fsync and the difference is within the noise.
+
 **R2 is deferred, not rejected.** IDEA-51 asked for both backends measured.
 No R2 credential exists in Signet today (CANT-47, Catenary's own R2
 decision, is still open), so an R2 implementation would be untested against

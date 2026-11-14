@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/Einlanzerous/trestle/compare/v0.1.0...v0.2.0) (2026-11-14)
+
+
+### Features
+
+* **api:** authenticated blob read (GENZO-6) ([#5](https://github.com/Einlanzerous/trestle/issues/5)) ([a407d7e](https://github.com/Einlanzerous/trestle/commit/a407d7e16db1e8e535ac098601b488e11c2679f5))
+* **serve:** TRESTLE_PUBLIC_SERVE switch for a private instance (GENZO-5) ([#4](https://github.com/Einlanzerous/trestle/issues/4)) ([01381ec](https://github.com/Einlanzerous/trestle/commit/01381ec122b8d3e477ec31ed128b4802ab379360))
+* **sniff:** TRESTLE_ALLOWED_TYPES with HEIC/HEIF, AVIF and QuickTime (GENZO-7) ([#6](https://github.com/Einlanzerous/trestle/issues/6)) ([dd731df](https://github.com/Einlanzerous/trestle/commit/dd731df7eab03515ad7662e04637a938c8d17897))
+
 ## 0.1.0 (2026-09-24)
 
 

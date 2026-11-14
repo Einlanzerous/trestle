@@ -190,6 +190,12 @@ func identify(head []byte) (Type, bool) {
 		}
 		return t, true
 	}
+	// SVG before ftyp, as in v1: a head isSVG accepts starts with '<',
+	// whitespace or a BOM, so it can never be an ISO-BMFF file, while an
+	// SVG prolog can put "ftyp" at bytes 4-8 ("<!--ftyp-->…").
+	if isSVG(head) {
+		return SVG, true
+	}
 	if major, compat, ok := ftypBrands(head); ok {
 		// An ftyp box is decided by its brands alone: a brand not in the
 		// table is refused here, never handed on to a looser check.
@@ -197,9 +203,6 @@ func identify(head []byte) (Type, bool) {
 			return t, true
 		}
 		return Type{MIME: mime}, false
-	}
-	if isSVG(head) {
-		return SVG, true
 	}
 	return Type{MIME: mime}, false
 }

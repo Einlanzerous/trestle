@@ -161,6 +161,9 @@ func TestDefaultListAgreesWithV1(t *testing.T) {
 		ftyp("qt  ", 0, "qt  ", "mp42"), ftyp("heic", 0, "mif1", "mp41"), ftyp("crx ", 1, "crx "),
 		[]byte("\x00\x00\x00\x08ftypheic"), []byte("<!DOCTYPE html><html></html>"), []byte("hello"),
 		[]byte("%PDF-1.7\n"), []byte(`<?xml version="1.0"?><svg/>`), {}, {0},
+		// SVG prologs that put "ftyp" at bytes 4-8 (found in review of #6).
+		[]byte("<!--ftyp-->\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
+		[]byte(`<?a ftyp?><svg xmlns="http://www.w3.org/2000/svg"/>`),
 	}
 	for i, head := range corpus {
 		want, wantOK := detectV1(head)
@@ -172,7 +175,10 @@ func TestDefaultListAgreesWithV1(t *testing.T) {
 }
 
 func FuzzDefaultListAgreesWithV1(f *testing.F) {
-	for _, h := range [][]byte{pngHead, mp4Head, webmHead, svgHead, iphoneHEIC, iphoneMOV, libavifAVIF} {
+	for _, h := range [][]byte{
+		pngHead, mp4Head, webmHead, svgHead, iphoneHEIC, iphoneMOV, libavifAVIF,
+		[]byte("<!--ftyp-->\n<svg/>"), []byte("<?a ftyp?><svg/>"),
+	} {
 		f.Add(h)
 	}
 	f.Fuzz(func(t *testing.T, head []byte) {

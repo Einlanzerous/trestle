@@ -23,6 +23,7 @@ type Deps struct {
 	Tokens        []config.Token
 	PublicBaseURL string
 	Caps          sniff.Caps
+	Allowed       sniff.AllowList // nil is the default allow-list
 	Quota         int64
 
 	// Private is TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted at all, and

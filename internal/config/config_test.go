@@ -176,3 +176,30 @@ func TestPublicServeBadValueRefusesBoot(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowedTypes(t *testing.T) {
+	setEnv(t, required())
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AllowedTypes.Names() != "png, jpeg, webp, gif, svg, mp4, webm" {
+		t.Fatalf("default allowed types = %s", c.AllowedTypes.Names())
+	}
+
+	env := required()
+	env["TRESTLE_ALLOWED_TYPES"] = "image/jpeg,image/heic,image/heif,image/avif,video/quicktime,video/mp4"
+	setEnv(t, env)
+	if c, err = Load(); err != nil || c.AllowedTypes.Names() != "jpeg, mp4, heic, heif, avif, quicktime" {
+		t.Fatalf("opt-in = %v, %v", c.AllowedTypes.MIMEs(), err)
+	}
+
+	for _, bad := range []string{"image/x-canon-cr2", "image/png,,image/gif", "heic", ","} {
+		env := required()
+		env["TRESTLE_ALLOWED_TYPES"] = bad
+		setEnv(t, env)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRESTLE_ALLOWED_TYPES") {
+			t.Errorf("TRESTLE_ALLOWED_TYPES=%q: %v, want a refusal naming the variable", bad, err)
+		}
+	}
+}

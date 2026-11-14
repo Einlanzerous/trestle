@@ -117,15 +117,53 @@ second file format for a table that will hold thousands of rows, not millions.
   duration, plus a `d` suffix for days (`7d`, `720h`).
 - **The client's `Content-Type` is never trusted.** The type is sniffed from
   the first 512 bytes (`http.DetectContentType`, plus an SVG check: an XML
-  document whose root element is `svg`). The sniffed type is what the record
-  stores and what `/m/` serves. Off the allow-list → **415**.
-- Allow-list and default caps (env-overridable, see Config):
+  document whose root element is `svg`, plus the ISO-BMFF brand table
+  below). The sniffed type is what the record stores and what `/m/` serves.
+  Off the instance's allow-list → **415**.
+- Default allow-list and caps (env-overridable, see Config):
 
   | type | ext | cap |
   |---|---|---|
   | `image/png` `image/jpeg` `image/webp` `image/gif` | png jpg webp gif | `TRESTLE_MAX_IMAGE_BYTES`, default 10 MiB |
   | `image/svg+xml` | svg | same image cap |
   | `video/mp4` `video/webm` | mp4 webm | `TRESTLE_MAX_VIDEO_BYTES`, default 100 MiB |
+
+- **Per-instance allow-list** (*amended 2026-11-14, GENZO-7*).
+  `TRESTLE_ALLOWED_TYPES` is a comma-separated list of MIME types; unset is
+  exactly the table above, so the public instance accepts nothing new. A
+  type Trestle cannot recognise refuses the boot, naming the variable. Four
+  more types are recognised, for a photo library to opt in to:
+
+  | type | ext | cap |
+  |---|---|---|
+  | `image/heic` `image/heif` `image/avif` | heic heif avif | image cap |
+  | `video/quicktime` | mov | video cap |
+
+  They are read from the leading ISO-BMFF `ftyp` box. **The v1 checks run
+  first, unchanged**: anything `http.DetectContentType` already calls
+  `video/mp4` (a major or compatible brand starting `mp4`) stays mp4, so on
+  the default list every input gets exactly the v1 answer (a test holds the
+  default list to a frozen copy of the v1 sniffer, and a fuzz target does the
+  same). Only an `ftyp` box v1 refused reaches the brand table:
+
+  | major brand | type |
+  |---|---|
+  | `heic` `heix` `hevc` `hevx` | `image/heic` |
+  | `avif` `avis` | `image/avif` |
+  | `qt  ` | `video/quicktime` |
+  | `mif1` `msf1` | by the compatible brands: HEVC brands (`heic` `heix` `hevc` `hevx`) and no AV1 brand → `image/heic`; AV1 brands (`avif` `avis`) and no HEVC brand → `image/avif`; neither, or both → `image/heif` |
+  | anything else, or a malformed box | **refused** |
+
+  `mif1`/`msf1` are the generic HEIF structural brands; the compatible brands
+  say which codec the file declares, and the codec is what a reader needs a
+  decoder for, which is what the type is for. A file that declares HEVC is
+  labelled `image/heic` (ISO/IEC 23008-12's type for HEVC-coded HEIF); one
+  that declares nothing specific, or contradicts itself, gets the generic
+  container type `image/heif` rather than a guess. All four are image or
+  video containers with no active content, so the label decides decoding,
+  never what the browser may execute. An `ftyp` box whose brands are not in
+  the table is refused outright and **never handed to a looser check**. RAW
+  formats (e.g. Canon CR3's `crx ` brand) are out of scope and refused.
 
   Over the cap for the sniffed type → **413**. The cap is enforced while
   streaming (`http.MaxBytesReader` at the video cap, then the type cap once
@@ -263,6 +301,7 @@ year"; a caller that wants less says so.
 | `TRESTLE_PUBLIC_SERVE` | `true` | `false` makes a private instance: `/m/` not mounted, `url` null (GENZO-5) |
 | `TRESTLE_PUBLIC_BASE_URL` | — | required when public; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries`. Must be unset when `TRESTLE_PUBLIC_SERVE=false` |
 | `TRESTLE_TOKENS` | — | required, at least one entry |
+| `TRESTLE_ALLOWED_TYPES` | v1's seven | comma-separated MIME types; unknown type refuses the boot (GENZO-7) |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
 | `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | |

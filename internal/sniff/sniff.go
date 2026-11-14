@@ -8,7 +8,10 @@ package sniff
 
 import (
 	"bytes"
+	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -34,24 +37,152 @@ type Type struct {
 // SVG is the one type served as an attachment; api checks for it by value.
 var SVG = Type{"image/svg+xml", "svg", Image}
 
-var allowed = map[string]Type{
-	"image/png":  {"image/png", "png", Image},
-	"image/jpeg": {"image/jpeg", "jpg", Image},
-	"image/webp": {"image/webp", "webp", Image},
-	"image/gif":  {"image/gif", "gif", Image},
-	"video/mp4":  {"video/mp4", "mp4", Video},
-	"video/webm": {"video/webm", "webm", Video},
+// The ISO-BMFF types recognised from an ftyp box's brands (GENZO-7). None is
+// on the default allow-list; an instance opts in with TRESTLE_ALLOWED_TYPES.
+var (
+	HEIC      = Type{"image/heic", "heic", Image}
+	HEIF      = Type{"image/heif", "heif", Image}
+	AVIF      = Type{"image/avif", "avif", Image}
+	QuickTime = Type{"video/quicktime", "mov", Video}
+)
+
+// known is every type Trestle can recognise, in the order a 415 lists them.
+var known = []Type{
+	{"image/png", "png", Image},
+	{"image/jpeg", "jpg", Image},
+	{"image/webp", "webp", Image},
+	{"image/gif", "gif", Image},
+	SVG,
+	{"video/mp4", "mp4", Video},
+	{"video/webm", "webm", Video},
+	HEIC,
+	HEIF,
+	AVIF,
+	QuickTime,
 }
 
+// AllowList is the set of types an instance will hold, keyed by MIME type.
+// A nil AllowList is the default one.
+type AllowList map[string]Type
+
+// allowed is the default allow-list: exactly v1's, so the public instance
+// accepts nothing new unless TRESTLE_ALLOWED_TYPES says so.
+var allowed = AllowList{
+	"image/png":     known[0],
+	"image/jpeg":    known[1],
+	"image/webp":    known[2],
+	"image/gif":     known[3],
+	"image/svg+xml": SVG,
+	"video/mp4":     known[5],
+	"video/webm":    known[6],
+}
+
+// detected is what http.DetectContentType names itself: v1's table.
+var detected = map[string]Type{
+	"image/png":  known[0],
+	"image/jpeg": known[1],
+	"image/webp": known[2],
+	"image/gif":  known[3],
+	"video/mp4":  known[5],
+	"video/webm": known[6],
+}
+
+// DefaultAllowList returns a copy of the default allow-list.
+func DefaultAllowList() AllowList { return maps.Clone(allowed) }
+
+// ParseAllowList reads a comma-separated list of MIME types. Empty means the
+// default. A type Trestle cannot recognise is an error rather than a no-op:
+// an operator who lists image/x-canon-cr2 expects it to be accepted, and it
+// never would be.
+func ParseAllowList(raw string) (AllowList, error) {
+	if strings.TrimSpace(raw) == "" {
+		return DefaultAllowList(), nil
+	}
+	l := AllowList{}
+	for _, entry := range strings.Split(raw, ",") {
+		mime := strings.ToLower(strings.TrimSpace(entry))
+		if mime == "" {
+			return nil, fmt.Errorf("an entry is empty")
+		}
+		i := slices.IndexFunc(known, func(t Type) bool { return t.MIME == mime })
+		if i < 0 {
+			return nil, fmt.Errorf("%q is not a type Trestle recognises (known: %s)", mime, knownMIMEs())
+		}
+		l[mime] = known[i]
+	}
+	return l, nil
+}
+
+func knownMIMEs() string {
+	out := make([]string, len(known))
+	for i, t := range known {
+		out[i] = t.MIME
+	}
+	return strings.Join(out, ", ")
+}
+
+func (l AllowList) orDefault() AllowList {
+	if l == nil {
+		return allowed
+	}
+	return l
+}
+
+// Names lists the allowed types by short name (png, jpeg, svg, quicktime…)
+// in a fixed order, for the 415 message.
+func (l AllowList) Names() string {
+	l = l.orDefault()
+	var out []string
+	for _, t := range known {
+		if _, ok := l[t.MIME]; ok {
+			sub := strings.TrimSuffix(t.MIME[strings.IndexByte(t.MIME, '/')+1:], "+xml")
+			out = append(out, sub)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// MIMEs lists the allowed MIME types in the same fixed order.
+func (l AllowList) MIMEs() []string {
+	l = l.orDefault()
+	var out []string
+	for _, t := range known {
+		if _, ok := l[t.MIME]; ok {
+			out = append(out, t.MIME)
+		}
+	}
+	return out
+}
+
+// Detect classifies head against the default allow-list.
+func Detect(head []byte) (Type, bool) { return allowed.Detect(head) }
+
 // Detect classifies head (at most HeadSize bytes of the upload). When the
-// type is not allowed, ok is false and the returned MIME says what was seen,
-// for the error message.
-func Detect(head []byte) (t Type, ok bool) {
+// type is not recognised or not on l, ok is false and the returned MIME says
+// what was seen, for the error message.
+func (l AllowList) Detect(head []byte) (Type, bool) {
+	t, ok := identify(head)
+	if !ok {
+		return t, false
+	}
+	if _, ok := l.orDefault()[t.MIME]; !ok {
+		return Type{MIME: t.MIME}, false
+	}
+	return t, true
+}
+
+// identify recognises head as one of known, whatever the allow-list.
+//
+// The v1 checks run first and unchanged, so on the default allow-list every
+// input gets exactly v1's answer: the ISO-BMFF brand table only ever sees a
+// head v1 refused. In particular anything http.DetectContentType calls
+// video/mp4 (a major or compatible brand starting "mp4") stays mp4.
+func identify(head []byte) (Type, bool) {
 	if len(head) > HeadSize {
 		head = head[:HeadSize]
 	}
 	mime := http.DetectContentType(head)
-	if t, ok := allowed[mime]; ok {
+	if t, ok := detected[mime]; ok {
 		// DetectContentType calls anything with an EBML magic number webm,
 		// Matroska included; the DocType is what actually says webm.
 		if t.MIME == "video/webm" && ebmlDocType(head) != "webm" {
@@ -59,8 +190,19 @@ func Detect(head []byte) (t Type, ok bool) {
 		}
 		return t, true
 	}
+	// SVG before ftyp, as in v1: a head isSVG accepts starts with '<',
+	// whitespace or a BOM, so it can never be an ISO-BMFF file, while an
+	// SVG prolog can put "ftyp" at bytes 4-8 ("<!--ftyp-->…").
 	if isSVG(head) {
 		return SVG, true
+	}
+	if major, compat, ok := ftypBrands(head); ok {
+		// An ftyp box is decided by its brands alone: a brand not in the
+		// table is refused here, never handed on to a looser check.
+		if t, ok := fromBrands(major, compat); ok {
+			return t, true
+		}
+		return Type{MIME: mime}, false
 	}
 	return Type{MIME: mime}, false
 }

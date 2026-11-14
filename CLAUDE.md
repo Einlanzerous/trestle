@@ -22,7 +22,7 @@ the storage layout or the serve headers.
 - `internal/index/` — the flat-file record index: one JSON per blob under
   `<data>/index/`, in memory at boot, atomic writes.
 - `internal/api/` — the HTTP surface: `/v1/*` (bearer-gated), `/m/*`
-  (public), probes.
+  (public; not mounted on a private instance), probes.
 - `internal/sniff/` — content-type detection and the allow-list.
 - `deploy/` — the `Dockerfile` and `README.md` (decisions the construct-server
   block needs). **No compose fragment and no Traefik labels here**: the block
@@ -55,7 +55,10 @@ the storage layout or the serve headers.
 3. **`/m/` is public and serves only blobs.** No listing, no index, no API
    under it. It is the one unauthenticated surface on the estate that serves
    agent-uploaded bytes, and the exposure is bounded by the allow-list, the
-   size caps, the per-token quota and the serve log naming the owner.
+   size caps, the per-token quota and the serve log naming the owner. A
+   **private instance** (`TRESTLE_PUBLIC_SERVE=false`, GENZO-5) does not
+   mount `/m/` at all: nothing it holds is served without a bearer token, and
+   its upload `url` is `null`. Only the probes are unauthenticated there.
 4. **SVG is never served inline.** `Content-Disposition: attachment` plus a
    sandboxing CSP. `<img>` embedding ignores the disposition, so the use case
    loses nothing.

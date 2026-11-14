@@ -373,3 +373,39 @@ func TestReconcileRefusesAnEmptyIndexOverBlobs(t *testing.T) {
 		}
 	}
 }
+
+// GENZO-5: a private instance answers "url": null, and the client prints the
+// sha256 (the handle the blob is read back by) rather than "null" or "".
+func TestUploadClientPrivateInstancePrintsSHA(t *testing.T) {
+	d := testDeps(t)
+	d.cfg.Private, d.cfg.PublicBaseURL = true, ""
+	d, err := setup(d.cfg, d.logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(d.router)
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(png)
+	t.Setenv("TRESTLE_URL", srv.URL)
+	t.Setenv("TRESTLE_TOKEN", agentTok)
+	var out bytes.Buffer
+	if err := runUpload([]string{path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("private upload printed %q, want the sha256", got)
+	}
+	resp, err := http.Get(srv.URL + "/m/" + hex.EncodeToString(sum[:]) + ".png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("private /m/ = %d, want 404", resp.StatusCode)
+	}
+}

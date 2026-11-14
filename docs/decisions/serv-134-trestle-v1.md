@@ -24,6 +24,26 @@ Switchyard, Interlock and Catenary.
   - `/m/*` — the public serve path. No auth, ever.
   - `/healthz`, `/readyz` — probes, unauthenticated, JSON.
 
+### Public and private instances
+
+*Amended 2026-11-14 (GENZO-5).* The same binary runs in two shapes, chosen
+by `TRESTLE_PUBLIC_SERVE`:
+
+- **Public** (`true`, the default — everything above, unchanged): `/m/` is
+  mounted and every upload answers with a public URL.
+- **Private** (`false`): `/m/` is **not mounted at all**, so every `/m/…`
+  request is the mux's 404 whether or not the blob exists. Nothing on a
+  private instance serves bytes without a bearer token. Its first consumer is
+  the Genzo photo library (`trestle-genzo`), which holds the only token.
+  `TRESTLE_PUBLIC_BASE_URL` has no meaning there: it is not required, and
+  setting it alongside `TRESTLE_PUBLIC_SERVE=false` refuses the boot, so a
+  switch flipped by accident on the public instance fails loudly instead of
+  turning every pasted link into a 404. The upload response's `url` is JSON
+  `null` (below). Probes stay unauthenticated on both.
+
+A bad `TRESTLE_PUBLIC_SERVE` value (anything `strconv.ParseBool` does not
+accept) refuses the boot, naming the variable.
+
 ## Storage: content hash is the key (IDEA-51 §A1)
 
 Both the blob store and the index key on the **SHA-256 of the bytes**, hex.
@@ -120,7 +140,10 @@ second file format for a table that will hold thousands of rows, not millions.
    "bytes":12345,"content_type":"image/png","expires_at":null,"existed":false}
   ```
 
-  `url` is `TRESTLE_PUBLIC_BASE_URL` + `/m/<sha256>.<ext>`. **The canonical
+  `url` is `TRESTLE_PUBLIC_BASE_URL` + `/m/<sha256>.<ext>`. On a private
+  instance it is JSON `null` (*GENZO-5*): there is nothing to fetch it from,
+  and a string that looks like a URL would get pasted somewhere and 404. The
+  `sha256` is the handle; `trestle upload` prints it instead of a URL. **The canonical
   URL carries the extension** because Cloudflare's default cache eligibility
   is by extension, and an immutable blob behind the tunnel should be served
   from the edge, not the box.
@@ -205,7 +228,8 @@ year"; a caller that wants less says so.
 |---|---|---|
 | `TRESTLE_PORT` | `4014` | |
 | `TRESTLE_DATA_DIR` | — | required |
-| `TRESTLE_PUBLIC_BASE_URL` | — | required; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries` |
+| `TRESTLE_PUBLIC_SERVE` | `true` | `false` makes a private instance: `/m/` not mounted, `url` null (GENZO-5) |
+| `TRESTLE_PUBLIC_BASE_URL` | — | required when public; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries`. Must be unset when `TRESTLE_PUBLIC_SERVE=false` |
 | `TRESTLE_TOKENS` | — | required, at least one entry |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |

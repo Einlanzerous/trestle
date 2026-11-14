@@ -22,7 +22,8 @@ or, with the env read for you:
 TRESTLE_URL=http://127.0.0.1:4014 TRESTLE_TOKEN=… trestle upload shot.png [--ttl 30d]
 ```
 
-Both print the public URL, e.g.
+Both print the public URL (on a [private instance](#private-instances),
+`url` is `null` and `trestle upload` prints the sha256 instead), e.g.
 `https://trestle.zerogravity.industries/m/<sha256>.png`. With no `ttl` the
 upload is permanent. `ttl` is a Go duration (`720h`) or a day count (`30d`).
 
@@ -53,7 +54,7 @@ Every `/v1` route needs `Authorization: Bearer <token>`. Errors are JSON:
 | `GET /v1/uploads` | `{"uploads":[…]}`: what this token owns, newest first |
 | `GET /v1/uploads/{id}` | one upload this token owns; 404 otherwise |
 | `DELETE /v1/uploads/{id}` | drop this token's ownership; the blob goes when its last owner does. 204, or 404 if not yours |
-| `GET`/`HEAD /m/{sha256}[.{ext}]` | public. Serves the bytes with byte ranges. 404 when the blob is unknown, expired, or the extension disagrees with the record |
+| `GET`/`HEAD /m/{sha256}[.{ext}]` | public instance only. Serves the bytes with byte ranges. 404 when the blob is unknown, expired, or the extension disagrees with the record |
 | `GET /healthz` | `{"status":"ok","version":"0.1.0","sha":"<40 hex>"\|null}` |
 | `GET /readyz` | same shape; 503 `"degraded"` when the data dir is not writable |
 
@@ -81,7 +82,8 @@ never appear in logs or errors.
 |---|---|---|
 | `TRESTLE_PORT` | `4014` | |
 | `TRESTLE_DATA_DIR` | required | `blobs/`, `index/`, `tmp/` live here |
-| `TRESTLE_PUBLIC_BASE_URL` | required | scheme+host, no trailing slash |
+| `TRESTLE_PUBLIC_SERVE` | `true` | `false` runs a private instance (below) |
+| `TRESTLE_PUBLIC_BASE_URL` | required when public | scheme+host, no trailing slash; must be unset when `TRESTLE_PUBLIC_SERVE=false` |
 | `TRESTLE_TOKENS` | required | `name=sha256hex,name=sha256hex,…` |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
@@ -93,6 +95,15 @@ never appear in logs or errors.
 
 The upload client reads `TRESTLE_URL` and `TRESTLE_TOKEN`. Any config error
 refuses the boot, and the message names the variable.
+
+### Private instances
+
+`TRESTLE_PUBLIC_SERVE=false` runs the same binary as a private store. `/m/`
+is not mounted, so every `/m/…` path is 404 whether or not the blob exists,
+and nothing is served without a bearer token. `TRESTLE_PUBLIC_BASE_URL` is
+not required (and refuses the boot if set), and an upload's `url` is JSON
+`null`: the `sha256` is the handle. The probes stay unauthenticated. The
+first private instance is `trestle-genzo`, the photo library's store.
 
 ### Storage
 

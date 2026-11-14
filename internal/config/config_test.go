@@ -127,3 +127,52 @@ func TestParseTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicServeSwitch(t *testing.T) {
+	for _, v := range []string{"", "true", "TRUE", "1", " t "} {
+		env := required()
+		env["TRESTLE_PUBLIC_SERVE"] = v
+		setEnv(t, env)
+		c, err := Load()
+		if err != nil || c.Private || c.PublicBaseURL != "https://media.example.test" {
+			t.Errorf("TRESTLE_PUBLIC_SERVE=%q: %+v, %v; want public", v, c, err)
+		}
+	}
+
+	// Private: the base URL is not required, and is refused if present.
+	for _, v := range []string{"false", "0", "F"} {
+		env := required()
+		delete(env, "TRESTLE_PUBLIC_BASE_URL")
+		env["TRESTLE_PUBLIC_SERVE"] = v
+		setEnv(t, env)
+		c, err := Load()
+		if err != nil || !c.Private || c.PublicBaseURL != "" {
+			t.Errorf("TRESTLE_PUBLIC_SERVE=%q: %+v, %v; want private", v, c, err)
+		}
+	}
+	env := required()
+	env["TRESTLE_PUBLIC_SERVE"] = "false"
+	setEnv(t, env)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRESTLE_PUBLIC_BASE_URL") || !strings.Contains(err.Error(), "TRESTLE_PUBLIC_SERVE") {
+		t.Errorf("private with a base URL: %v, want a refusal naming both variables", err)
+	}
+
+	// Public still requires it.
+	env = required()
+	delete(env, "TRESTLE_PUBLIC_BASE_URL")
+	setEnv(t, env)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRESTLE_PUBLIC_BASE_URL") {
+		t.Errorf("public without a base URL: %v", err)
+	}
+}
+
+func TestPublicServeBadValueRefusesBoot(t *testing.T) {
+	for _, v := range []string{"yes", "off", "private", "2"} {
+		env := required()
+		env["TRESTLE_PUBLIC_SERVE"] = v
+		setEnv(t, env)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRESTLE_PUBLIC_SERVE") {
+			t.Errorf("TRESTLE_PUBLIC_SERVE=%q: %v, want a refusal naming the variable", v, err)
+		}
+	}
+}

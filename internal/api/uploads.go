@@ -35,7 +35,7 @@ const maxTTLDays = 100_000
 type uploadView struct {
 	ID          string     `json:"id"`
 	SHA256      string     `json:"sha256"`
-	URL         string     `json:"url"`
+	URL         *string    `json:"url"`
 	Bytes       int64      `json:"bytes"`
 	ContentType string     `json:"content_type"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -49,11 +49,19 @@ type uploadResponse struct {
 
 // view deliberately omits owners: the API does not confirm who else uploaded
 // the same bytes.
+//
+// url is null on a private instance: there is no /m/ to fetch from, and a
+// string that looks like a URL would get pasted somewhere and 404.
 func (a *api) view(r index.Record) uploadView {
+	var u *string
+	if !a.Private {
+		s := a.PublicBaseURL + "/m/" + r.SHA256 + "." + r.Ext
+		u = &s
+	}
 	return uploadView{
 		ID:          r.SHA256,
 		SHA256:      r.SHA256,
-		URL:         a.PublicBaseURL + "/m/" + r.SHA256 + "." + r.Ext,
+		URL:         u,
 		Bytes:       r.Bytes,
 		ContentType: r.ContentType,
 		CreatedAt:   r.CreatedAt,

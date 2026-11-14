@@ -174,6 +174,7 @@ func (a *api) upload(w http.ResponseWriter, r *http.Request) {
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	info(r).hash = hash
+	quota := a.quotaFor(owner)
 	rec, existed, err := a.Index.Add(index.Upload{
 		SHA256:      hash,
 		Bytes:       size,
@@ -181,10 +182,10 @@ func (a *api) upload(w http.ResponseWriter, r *http.Request) {
 		Ext:         typ.Ext,
 		Owner:       owner,
 		ExpiresAt:   expiresAt,
-	}, a.Quota, now, func() error { return bw.Commit(hash) })
+	}, quota, now, func() error { return bw.Commit(hash) })
 	if errors.Is(err, index.ErrQuota) {
 		writeError(w, http.StatusRequestEntityTooLarge, "quota_exceeded",
-			fmt.Sprintf("this upload would take the token past its %d-byte quota", a.Quota))
+			fmt.Sprintf("this upload would take the token past its %d-byte quota", quota))
 		return
 	}
 	if err != nil {

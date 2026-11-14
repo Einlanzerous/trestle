@@ -23,8 +23,9 @@ type Deps struct {
 	Tokens        []config.Token
 	PublicBaseURL string
 	Caps          sniff.Caps
-	Allowed       sniff.AllowList // nil is the default allow-list
-	Quota         int64
+	Allowed       sniff.AllowList  // nil is the default allow-list
+	Quota         int64            // bytes a token may own, unless Quotas names it
+	Quotas        map[string]int64 // per-token overrides of Quota, by token name
 
 	// Private is TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted at all, and
 	// an upload's url is null. The zero value is the public instance.
@@ -43,6 +44,14 @@ type Deps struct {
 }
 
 type api struct{ Deps }
+
+// quotaFor is the quota that applies to the named token.
+func (a *api) quotaFor(owner string) int64 {
+	if q, ok := a.Quotas[owner]; ok {
+		return q
+	}
+	return a.Quota
+}
 
 // NewRouter builds the handler.
 //

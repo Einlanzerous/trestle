@@ -320,6 +320,48 @@ func TestQuota(t *testing.T) {
 	e.upload(aliceTok, "?ttl=1h", a, http.StatusCreated)
 }
 
+// Each token is held to its own quota, independently; a token with no entry
+// takes Quota.
+func TestPerTokenQuotas(t *testing.T) {
+	e := newEnv(t, func(d *Deps) {
+		d.Quota = 5000
+		d.Quotas = map[string]int64{"alice": 1500}
+	})
+	// alice: her own 1500, not the default 5000.
+	e.upload(aliceTok, "", file(pngHead, 1000, 1), http.StatusCreated)
+	rec := e.do(http.MethodPost, "/v1/uploads", aliceTok, bytes.NewReader(file(pngHead, 1000, 2)))
+	if rec.Code != http.StatusRequestEntityTooLarge || errCode(t, rec) != "quota_exceeded" ||
+		!strings.Contains(rec.Body.String(), "1500-byte") {
+		t.Fatalf("alice over her own quota = %d %s", rec.Code, rec.Body)
+	}
+	// bob falls back to 5000 and is unaffected by alice's usage.
+	for i := byte(10); i < 14; i++ {
+		e.upload(bobTok, "", file(pngHead, 1000, i), http.StatusCreated)
+	}
+	e.upload(bobTok, "", file(pngHead, 1000, 14), http.StatusCreated)
+	rec = e.do(http.MethodPost, "/v1/uploads", bobTok, bytes.NewReader(file(pngHead, 1000, 15)))
+	if rec.Code != http.StatusRequestEntityTooLarge || errCode(t, rec) != "quota_exceeded" ||
+		!strings.Contains(rec.Body.String(), "5000-byte") {
+		t.Fatalf("bob over the default = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A shared blob counts in full against each owner, per-token quota or not.
+func TestPerTokenQuotaSharedBlobCountsInFull(t *testing.T) {
+	e := newEnv(t, func(d *Deps) {
+		d.Quota = 1 << 20
+		d.Quotas = map[string]int64{"bob": 2500}
+	})
+	shared := file(pngHead, 2000, 1)
+	e.upload(aliceTok, "", shared, http.StatusCreated)
+	e.upload(bobTok, "", shared, http.StatusCreated) // 2000 of bob's 2500
+	rec := e.do(http.MethodPost, "/v1/uploads", bobTok, bytes.NewReader(file(pngHead, 1000, 2)))
+	if rec.Code != http.StatusRequestEntityTooLarge || errCode(t, rec) != "quota_exceeded" {
+		t.Fatalf("bob past quota with a shared blob = %d %s", rec.Code, rec.Body)
+	}
+	e.upload(aliceTok, "", file(pngHead, 1000, 2), http.StatusCreated) // alice is on the large default
+}
+
 func TestDedupeAndExpiryOnlyExtends(t *testing.T) {
 	e := newEnv(t)
 	data := file(pngHead, 600, 9)

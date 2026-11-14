@@ -79,7 +79,10 @@ Every `/v1` route needs `Authorization: Bearer <token>`. Errors are JSON:
 | `GET /readyz` | same shape; 503 `"degraded"` when the data dir is not writable |
 
 A token's quota is the sum of the bytes it owns. A shared blob counts in full
-against every owner.
+against every owner. Every token has the quota `TRESTLE_QUOTA_BYTES_BY_TOKEN`
+gives it, else `TRESTLE_QUOTA_BYTES_PER_TOKEN`. The quotas are independent, so
+the instance's ceiling is their sum: give two tokens one disk budget by splitting
+it between them (GENZO-50).
 
 ## Operating
 
@@ -108,7 +111,8 @@ never appear in logs or errors.
 | `TRESTLE_ALLOWED_TYPES` | the seven above | comma-separated MIME types; an unknown one refuses the boot |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
-| `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | |
+| `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | the quota of every token not named below |
+| `TRESTLE_QUOTA_BYTES_BY_TOKEN` | unset | `name=bytes,name=bytes,…`: a quota of its own for the named tokens. A name not in `TRESTLE_TOKENS`, a repeated name, or a value that is not 1 to 1 TiB refuses the boot |
 | `TRESTLE_SWEEP_INTERVAL` | `1h` | disk reclamation only; expiry is enforced on every read |
 | `TRESTLE_LOG_LEVEL` | `info` | debug/info/warn/error |
 | `TRESTLE_LOG_FORMAT` | `json` | json/text |

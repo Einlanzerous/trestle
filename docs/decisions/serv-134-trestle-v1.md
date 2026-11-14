@@ -262,6 +262,16 @@ second file format for a table that will hold thousands of rows, not millions.
   `TRESTLE_QUOTA_BYTES_PER_TOKEN` (default 2 GiB) → **413** with
   `"error":"quota_exceeded"`. A shared blob counts fully against each owner;
   that is deliberate and simple.
+
+  Per-token overrides (GENZO-50): `TRESTLE_QUOTA_BYTES_BY_TOKEN=name=bytes,…`
+  gives a named token its own quota; unnamed tokens keep
+  `TRESTLE_QUOTA_BYTES_PER_TOKEN`. The ceiling of an instance is therefore the
+  sum of its tokens' quotas, which is what lets two tokens (say originals and
+  derivatives) share one disk budget instead of each getting the whole of it.
+  Quotas are enforced per owner and independently; a blob both own counts in
+  full against each, as before. A name not in `TRESTLE_TOKENS` refuses the boot
+  (a typo would otherwise leave the token you meant to cap on the default), as
+  do a repeated name and a value outside 1 to 1 TiB. Unset, nothing changes.
 - Response **201** (also on dedupe — the caller got what it asked for):
 
   ```json
@@ -394,7 +404,8 @@ year"; a caller that wants less says so.
 | `TRESTLE_ALLOWED_TYPES` | v1's seven | comma-separated MIME types; unknown type refuses the boot (GENZO-7; `video/3gpp`, `video/3gpp2` recognised since GENZO-26) |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
-| `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | |
+| `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | quota of tokens with no entry below |
+| `TRESTLE_QUOTA_BYTES_BY_TOKEN` | — | optional `name=bytes,…` per-token quotas (GENZO-50); names must be in `TRESTLE_TOKENS` |
 | `TRESTLE_SWEEP_INTERVAL` | `1h` | |
 | `TRESTLE_LOG_LEVEL` | `info` | debug/info/warn/error |
 | `TRESTLE_LOG_FORMAT` | `json` | json/text |

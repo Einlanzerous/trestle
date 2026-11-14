@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Einlanzerous/trestle/internal/blob"
+	"github.com/Einlanzerous/trestle/internal/index"
 	"github.com/Einlanzerous/trestle/internal/sniff"
 )
 
@@ -32,17 +33,50 @@ func (a *api) media(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such media")
 		return
 	}
-	ri := info(r)
-	ri.hash, ri.owners = hash, rec.Owners
 	if hasExt && ext != rec.Ext {
+		ri := info(r)
+		ri.hash, ri.owners = hash, rec.Owners
 		writeError(w, http.StatusNotFound, "not_found", "no such media")
 		return
 	}
+	a.serveBlob(w, r, hash, rec, true, "no such media")
+}
+
+// blobRead is GET/HEAD /v1/blobs/{sha256}: the authenticated read, for the
+// owner of a blob on either kind of instance. On a private instance it is
+// the only way bytes leave the service.
+//
+// Owner-scoped like /v1/uploads/{id}: unknown, expired and not-yours are
+// all the same 404, so the API does not confirm who else uploaded what. A
+// HEAD answers "do I already hold this hash?" without moving the bytes.
+func (a *api) blobRead(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("sha256")
+	if !blob.ValidHash(hash) {
+		writeError(w, http.StatusNotFound, "not_found", "no such blob")
+		return
+	}
+	rec, ok := a.Index.Get(hash, a.Now())
+	if !ok || !rec.Owns(caller(r)) {
+		writeError(w, http.StatusNotFound, "not_found", "no such blob")
+		return
+	}
+	a.serveBlob(w, r, hash, rec, false, "no such blob")
+}
+
+// serveBlob writes the bytes of a record already found live, with the
+// headers both read paths share. public picks the /m/ contract (shared
+// caches, cross-origin embedding) or the authenticated one (private cache
+// that revalidates every use, same-origin, no CORS). notFound is the
+// caller's own 404 message, so a record whose bytes are missing answers the
+// same as an unknown hash on that route.
+func (a *api) serveBlob(w http.ResponseWriter, r *http.Request, hash string, rec index.Record, public bool, notFound string) {
+	ri := info(r)
+	ri.hash, ri.owners = hash, rec.Owners
 
 	f, _, err := a.Blobs.Open(r.Context(), hash)
 	if errors.Is(err, blob.ErrNotFound) {
 		a.Logger.Warn("record without blob", "sha256", hash)
-		writeError(w, http.StatusNotFound, "not_found", "no such media")
+		writeError(w, http.StatusNotFound, "not_found", notFound)
 		return
 	}
 	if err != nil {
@@ -53,11 +87,23 @@ func (a *api) media(w http.ResponseWriter, r *http.Request) {
 
 	h := w.Header()
 	h.Set("Content-Type", rec.ContentType)
-	h.Set("Cache-Control", cacheControl(rec.ExpiresAt, a.Now()))
+	if public {
+		h.Set("Cache-Control", cacheControl(rec.ExpiresAt, a.Now()))
+	} else {
+		// private keeps it out of every shared cache; no-cache makes a
+		// client's own cache revalidate each use, so a DELETE or an expiry
+		// takes effect on the next read rather than a year later. The ETag
+		// makes that revalidation a 304 with no body.
+		h.Set("Cache-Control", "private, no-cache")
+	}
 	h.Set("ETag", `"`+hash+`"`)
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Cross-Origin-Resource-Policy", "cross-origin")
-	h.Set("Access-Control-Allow-Origin", "*")
+	if public {
+		h.Set("Cross-Origin-Resource-Policy", "cross-origin")
+		h.Set("Access-Control-Allow-Origin", "*")
+	} else {
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	}
 	filename := hash + "." + rec.Ext
 	// SVG is never served inline: navigated to directly it would run script
 	// in the estate's origin. <img> ignores the disposition, so embedding

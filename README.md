@@ -54,6 +54,7 @@ Every `/v1` route needs `Authorization: Bearer <token>`. Errors are JSON:
 | `GET /v1/uploads` | `{"uploads":[…]}`: what this token owns, newest first |
 | `GET /v1/uploads/{id}` | one upload this token owns; 404 otherwise |
 | `DELETE /v1/uploads/{id}` | drop this token's ownership; the blob goes when its last owner does. 204, or 404 if not yours |
+| `GET`/`HEAD /v1/blobs/{sha256}` | the bytes of a blob this token owns, with byte ranges; 404 when unknown, expired or not yours. `Cache-Control: private, no-cache`, no CORS. `HEAD` asks "do I hold this hash?". Public and private instances |
 | `GET`/`HEAD /m/{sha256}[.{ext}]` | public instance only. Serves the bytes with byte ranges. 404 when the blob is unknown, expired, or the extension disagrees with the record |
 | `GET /healthz` | `{"status":"ok","version":"0.1.0","sha":"<40 hex>"\|null}` |
 | `GET /readyz` | same shape; 503 `"degraded"` when the data dir is not writable |
@@ -102,7 +103,8 @@ refuses the boot, and the message names the variable.
 is not mounted, so every `/m/…` path is 404 whether or not the blob exists,
 and nothing is served without a bearer token. `TRESTLE_PUBLIC_BASE_URL` is
 not required (and refuses the boot if set), and an upload's `url` is JSON
-`null`: the `sha256` is the handle. The probes stay unauthenticated. The
+`null`: the `sha256` is the handle, and the owner reads the bytes back with
+`GET /v1/blobs/{sha256}`. The probes stay unauthenticated. The
 first private instance is `trestle-genzo`, the photo library's store.
 
 ### Storage

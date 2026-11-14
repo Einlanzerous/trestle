@@ -65,6 +65,12 @@ drops one of these, or narrows the CORS/CORP pair, is a finding even if the
 body is otherwise correct — the whole point of `/m/` is embedding from
 other origins.
 
+The authenticated read `GET /v1/blobs/{sha256}` (GENZO-6) has its own,
+narrower set, pinned in the design doc: `Cache-Control: private, no-cache`,
+`Cross-Origin-Resource-Policy: same-origin` and no
+`Access-Control-Allow-Origin`, same SVG rule. A diff that makes it `public`
+or adds a CORS wildcard there is a finding.
+
 The extension in a `/m/{sha256}.{ext}` path is **derived from the record,
 never from the request** (IDEA-51 §A3): a mismatch is 404, not a redirect.
 

@@ -66,6 +66,8 @@ func NewRouter(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/uploads", a.auth(a.list))
 	mux.HandleFunc("GET /v1/uploads/{id}", a.auth(a.get))
 	mux.HandleFunc("DELETE /v1/uploads/{id}", a.auth(a.delete))
+	// On both kinds of instance: on a private one it is the only read path.
+	mux.HandleFunc("GET /v1/blobs/{sha256}", a.auth(a.blobRead))
 
 	if !d.Private {
 		mux.HandleFunc("GET /m/{file}", a.media)

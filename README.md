@@ -42,16 +42,21 @@ filename. Anything else is refused with **415**.
 
 That is the default. An instance can choose its own list with
 `TRESTLE_ALLOWED_TYPES` (comma-separated MIME types), which can also name
-four types recognised from the ISO-BMFF `ftyp` brand and accepted nowhere by
-default:
+six types recognised from the ISO-BMFF `ftyp` brand (and, for QuickTime,
+from a classic box layout) and accepted nowhere by default:
 
 | type | ext | cap |
 |---|---|---|
 | `image/heic` `image/heif` `image/avif` | heic heif avif | `TRESTLE_MAX_IMAGE_BYTES` |
 | `video/quicktime` | mov | `TRESTLE_MAX_VIDEO_BYTES` |
+| `video/3gpp` `video/3gpp2` | 3gp 3g2 | `TRESTLE_MAX_VIDEO_BYTES` |
 
 An `ftyp` brand Trestle does not know is refused, never guessed at; anything
-that already sniffed as `video/mp4` still does. The brand rules are in the
+that already sniffed as `video/mp4` still does (a 3G2 that lists `mp42`
+included), and an `isom`-only file is still refused. A QuickTime movie with
+no `ftyp` box (an iPhone Live Photo's `wide` + `mdat`, or `moov`, `free`,
+`skip`, `pnot` first) is `video/quicktime` only when its top-level boxes
+parse and show a movie; a lone `mdat` is refused. The exact rules are in the
 design of record.
 
 SVGs are served with `Content-Disposition: attachment` and a sandboxing CSP.

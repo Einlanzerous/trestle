@@ -118,7 +118,7 @@ second file format for a table that will hold thousands of rows, not millions.
 - **The client's `Content-Type` is never trusted.** The type is sniffed from
   the first 512 bytes (`http.DetectContentType`, plus an SVG check: an XML
   document whose root element is `svg`, plus the ISO-BMFF brand table
-  below). The sniffed type is what the record stores and what `/m/` serves.
+  and the classic QuickTime box walk below). The sniffed type is what the record stores and what `/m/` serves.
   Off the instance's allow-list → **415**.
 - Default allow-list and caps (env-overridable, see Config):
 
@@ -164,6 +164,96 @@ second file format for a table that will hold thousands of rows, not millions.
   never what the browser may execute. An `ftyp` box whose brands are not in
   the table is refused outright and **never handed to a looser check**. RAW
   formats (e.g. Canon CR3's `crx ` brand) are out of scope and refused.
+
+- **Classic QuickTime and 3GP/3G2** (*amended 2026-11-14, GENZO-26*). A
+  private photo-library instance (Genzo) found v0.2.0 refusing two kinds of
+  real phone video as `application/octet-stream` even with
+  `video/quicktime` allowed. Two more types are recognised, off by default
+  like GENZO-7's, so the default list (and the public instance) accepts
+  nothing new:
+
+  | type | ext | cap |
+  |---|---|---|
+  | `video/3gpp` `video/3gpp2` | 3gp 3g2 | video cap |
+
+  **3GP/3G2 by brand.** The brand table above gains two rows. As the major
+  brand they decide like any other; only when the major brand is none of
+  the table's (typically a generic `isom`) are the compatible brands
+  consulted — any 3GPP2 brand → `video/3gpp2`, else any 3GPP brand →
+  `video/3gpp`:
+
+  | brand | type |
+  |---|---|
+  | `3gp4`–`3gp9`, `3ge6` `3ge7` `3ge9`, `3gg6` `3gg9`, `3gr6` `3gr9`, `3gs6` `3gs9`, `3gt8` `3gt9`, `3gf9` `3gtv` `3gvr` | `video/3gpp` |
+  | `3g2a` `3g2b` `3g2c` | `video/3gpp2` |
+
+  The 3GPP set is the MP4 registration authority's (mp4ra.org) whole-file
+  3GPP brands; `3gh9`, `3gm9` and `3gmA` mark adaptive-streaming init and
+  media segments, not a playable file, and stay refused. `3g2a` is
+  registered there; `3g2b`/`3g2c` are the later revisions of 3GPP2
+  C.S0050. A file whose brands already made it `video/mp4` keeps that
+  answer (a 3G2 that lists `mp42` is still `video/mp4`), and a `qt  `,
+  HEIF or AVIF major brand still decides over a compatible 3GP brand.
+  **`isom`-only files (no `mp4*` and no 3GPP brand) stay refused**: they
+  were refused before, and calling them `video/mp4` would change what the
+  default (public) instance accepts.
+
+  **Classic QuickTime (no leading `ftyp`) → `video/quicktime`.** QuickTime
+  predates ISO-BMFF and never required `ftyp`; Apple's writers still emit
+  `wide` then `mdat` first (an iPhone Live Photo movie), and fast-start or
+  older files begin with `moov`, `free`, `skip` or `pnot`. The check runs
+  last, so it only ever sees a head every earlier check refused (an
+  `ftyp`-first file is still decided by its brands alone). It looks at the
+  same 512-byte head as everything else — the window is not grown — and
+  accepts only when **all** of these hold:
+
+  1. The head parses from offset 0 as top-level boxes with valid sizes: a
+     32-bit size ≥ 8; or size 1 with a 64-bit largesize ≥ 16 and < 2^63; or
+     size 0 (to end of file, so the last box). Each box that ends inside
+     the head is followed by another valid box header; the walk stops at a
+     box that runs past the head, or a header the head cuts short.
+  2. The first box is `wide`, `mdat`, `free`, `skip`, `pnot` or `moov`;
+     every later one is one of those or `PICT`, `uuid` (QuickTime's
+     top-level atom set, less `ftyp`).
+  3. Every `wide` box is exactly 8 bytes (it is a placeholder header with no
+     payload).
+  4. There is positive evidence of a movie: an `mdat` header immediately
+     after a `wide`, `free` or `skip` box; **or** a `moov` whose first child
+     is visible and is a fixed-shape movie header — `mvhd` of exactly 108
+     bytes with version 0 or 120 bytes with version 1, `cmov` whose first
+     child is a 12-byte `dcom`, or `rmra` whose first child is an `rmda` —
+     and fits inside the `moov`.
+
+  *False positives.* A lone `mdat` (or `free`, `skip`, `pnot`) running past
+  the head is **refused**: its payload is arbitrary media bytes, so eight
+  bytes of "size + `mdat`" would be the whole signature. Text can never
+  pass: every 32-bit size in text is ≥ 0x09090909, so its first box runs
+  past any 512-byte head and is the only box seen, leaving only the `moov`
+  route, whose movie headers need NUL bytes in their size fields. Random
+  binary must first hit one of six types at bytes 4–8 (6 in 2^32) and then
+  satisfy rule 4. The neighbours that do look like boxes are not in the
+  set: JPEG 2000 (`jP  `, then `ftyp`), DASH segments (`styp`), fragments
+  (`moof`). Tests cover these, and random binary, random text and random
+  bytes behind a valid first header are all refused. The bytes are stored
+  and served as `video/quicktime` with `nosniff`, so even a false positive
+  is a video-type label on non-active content, and a hand-crafted file
+  could already claim QuickTime with an `ftyp qt  ` box.
+
+  *Known limit.* A classic file whose evidence lies past 512 bytes (a
+  `free` of 500+ bytes before `mdat`, a `pnot` preview `PICT` that large)
+  or that starts with a lone `mdat` (`mdat` first, `moov` at the end) is
+  refused. None of the public samples has that shape; growing the window
+  for it would mean reading more before the 415 for every upload.
+
+  *Default behaviour.* An instance that allows `video/quicktime` now accepts
+  classic QuickTime; that is the intended change. The default list does not
+  allow `video/quicktime`, `video/3gpp` or `video/3gpp2`, so the public
+  instance accepts nothing new; the only visible difference there is the
+  415 message, which now names `video/quicktime`, `video/3gpp` or
+  `video/3gpp2` where it said `application/octet-stream`. Tests hold the
+  new sniffer to a frozen copy of v0.2.0's: it may only turn a head v0.2.0
+  refused into one of the three types above, and a fuzz target does the
+  same (alongside the existing v1 comparison for the default list).
 
   Over the cap for the sniffed type → **413**. The cap is enforced while
   streaming (`http.MaxBytesReader` at the video cap, then the type cap once
@@ -301,7 +391,7 @@ year"; a caller that wants less says so.
 | `TRESTLE_PUBLIC_SERVE` | `true` | `false` makes a private instance: `/m/` not mounted, `url` null (GENZO-5) |
 | `TRESTLE_PUBLIC_BASE_URL` | — | required when public; scheme+host, no trailing slash, e.g. `https://trestle.zerogravity.industries`. Must be unset when `TRESTLE_PUBLIC_SERVE=false` |
 | `TRESTLE_TOKENS` | — | required, at least one entry |
-| `TRESTLE_ALLOWED_TYPES` | v1's seven | comma-separated MIME types; unknown type refuses the boot (GENZO-7) |
+| `TRESTLE_ALLOWED_TYPES` | v1's seven | comma-separated MIME types; unknown type refuses the boot (GENZO-7; `video/3gpp`, `video/3gpp2` recognised since GENZO-26) |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
 | `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | |

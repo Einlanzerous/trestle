@@ -194,7 +194,14 @@ func TestAllowedTypes(t *testing.T) {
 		t.Fatalf("opt-in = %v, %v", c.AllowedTypes.MIMEs(), err)
 	}
 
-	for _, bad := range []string{"image/x-canon-cr2", "image/png,,image/gif", "heic", ","} {
+	env = required()
+	env["TRESTLE_ALLOWED_TYPES"] = "video/quicktime,video/3gpp,video/3gpp2"
+	setEnv(t, env)
+	if c, err = Load(); err != nil || c.AllowedTypes.Names() != "quicktime, 3gpp, 3gpp2" {
+		t.Fatalf("3gpp opt-in = %v, %v", c.AllowedTypes.MIMEs(), err)
+	}
+
+	for _, bad := range []string{"image/x-canon-cr2", "image/png,,image/gif", "heic", ",", "video/3gp", "video/x-3gpp"} {
 		env := required()
 		env["TRESTLE_ALLOWED_TYPES"] = bad
 		setEnv(t, env)

@@ -122,7 +122,8 @@ server configuration is env-only, TRESTLE_-prefixed. There are no config files.
   TRESTLE_DATA_DIR               where blobs, index and tmp live. Required.
   TRESTLE_PUBLIC_SERVE           true | false. Default true. false runs a private
                                  instance: /m/ is not mounted, uploads carry
-                                 "url": null, reads go through the API.
+                                 "url": null and nothing is served without a
+                                 bearer token.
   TRESTLE_PUBLIC_BASE_URL        scheme+host that /m/ URLs are built on, no
                                  trailing slash. Required when public; must
                                  be unset when TRESTLE_PUBLIC_SERVE=false.
@@ -496,8 +497,8 @@ func runUpload(args []string, stdout io.Writer) error {
 }
 
 // upload POSTs the file's raw bytes and returns the public URL, or, from a
-// private instance whose url is null, the sha256: that is the handle the
-// caller reads the blob back by. Errors quote the server's error body, never
+// private instance whose url is null, the sha256: the blob's only handle
+// there. Errors quote the server's error body, never
 // the token.
 func upload(ctx context.Context, client *http.Client, base, token, path, ttl string) (string, error) {
 	f, err := os.Open(path)

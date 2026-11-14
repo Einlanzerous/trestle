@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +197,19 @@ func TestBlobReadLogLine(t *testing.T) {
 	}
 	if !saw {
 		t.Fatalf("no blob-read line naming actor, hash, owners, bytes and status in:\n%s", e.logs.String())
+	}
+}
+
+// A record whose bytes are missing from disk answers like an unknown hash.
+func TestBlobReadRecordWithoutBlob(t *testing.T) {
+	e := newEnv(t, private)
+	r := e.upload(aliceTok, "", file(pngHead, 600, 1), http.StatusCreated)
+	if err := os.Remove(filepath.Join(e.root, "blobs", r.ID[:2], r.ID)); err != nil {
+		t.Fatal(err)
+	}
+	missing := e.do(http.MethodGet, "/v1/blobs/"+r.ID, aliceTok, nil)
+	unknown := e.do(http.MethodGet, "/v1/blobs/"+strings.Repeat("0", 64), aliceTok, nil)
+	if missing.Code != http.StatusNotFound || missing.Body.String() != unknown.Body.String() {
+		t.Fatalf("missing bytes = %d %s; unknown = %s", missing.Code, missing.Body, unknown.Body)
 	}
 }

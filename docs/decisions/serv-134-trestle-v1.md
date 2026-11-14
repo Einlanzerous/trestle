@@ -39,7 +39,8 @@ by `TRESTLE_PUBLIC_SERVE`:
   setting it alongside `TRESTLE_PUBLIC_SERVE=false` refuses the boot, so a
   switch flipped by accident on the public instance fails loudly instead of
   turning every pasted link into a 404. The upload response's `url` is JSON
-  `null` (below). Probes stay unauthenticated on both.
+  `null` (below), and the owner reads bytes back through the authenticated
+  `GET /v1/blobs/{sha256}` (GENZO-6). Probes stay unauthenticated on both.
 
 A bad `TRESTLE_PUBLIC_SERVE` value (anything `strconv.ParseBool` does not
 accept) refuses the boot, naming the variable.
@@ -158,6 +159,37 @@ but the API does not confirm who else uploaded what.
 After a `DELETE` of a permanent blob, edge and browser caches may keep
 serving it for up to a year under `immutable`; purging it is a
 Cloudflare-side action, not something the origin can force.
+
+### `GET /v1/blobs/{sha256}` · `HEAD /v1/blobs/{sha256}`
+
+*Added 2026-11-14 (GENZO-6).* The owner's authenticated read, on public and
+private instances alike; on a private instance it is the only way bytes
+leave the service.
+
+- Bearer-gated (401 without a valid token) and **owner-scoped**: unknown,
+  expired and not-yours are the same **404** as `/v1/uploads/{id}`. `HEAD`
+  answers "do I already hold this hash?" without moving the bytes; a 404
+  there means "upload it" — dedupe makes that cheap if someone else holds it.
+- Bare hash only; there is no `.{ext}` form, because nothing here needs an
+  extension for an edge cache.
+- `http.ServeContent`, so `HEAD`, single byte ranges (video seeking) and
+  `If-None-Match` work; a multi-range request gets the whole blob, as on `/m/`.
+- Headers:
+  - `Content-Type` from the record; `ETag: "<sha256>"`; `Last-Modified` from
+    `created_at`; `X-Content-Type-Options: nosniff`.
+  - `Cache-Control: private, no-cache`. `private` keeps it out of every shared
+    cache. `no-cache` rather than a `max-age`: the bytes behind a hash never
+    change, but the *right to read them* does — a `DELETE` or an expiry must
+    take effect on the next read, not when a client's cache gets round to it.
+    The ETag makes each revalidation a body-less 304, and the token and
+    ownership are checked on it too.
+  - `Cross-Origin-Resource-Policy: same-origin` and **no**
+    `Access-Control-Allow-Origin`: there is no cross-origin embedding use case
+    for an authenticated read.
+  - `Content-Disposition: inline; filename="<sha256>.<ext>"`, except SVG,
+    which gets `attachment` and the same sandboxing CSP as `/m/` (invariant 4).
+- The request log line names the hash, the actor (token name), the owners,
+  the bytes sent and the status — never a token.
 
 ### `GET /m/{sha256}` and `GET /m/{sha256}.{ext}`
 

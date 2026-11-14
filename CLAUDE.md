@@ -58,7 +58,9 @@ the storage layout or the serve headers.
    size caps, the per-token quota and the serve log naming the owner. A
    **private instance** (`TRESTLE_PUBLIC_SERVE=false`, GENZO-5) does not
    mount `/m/` at all: nothing it holds is served without a bearer token, and
-   its upload `url` is `null`. Only the probes are unauthenticated there.
+   its upload `url` is `null`. Owners read bytes back through the bearer-gated,
+   owner-scoped `GET /v1/blobs/{sha256}` (GENZO-6). Only the probes are
+   unauthenticated there.
 4. **SVG is never served inline.** `Content-Disposition: attachment` plus a
    sandboxing CSP. `<img>` embedding ignores the disposition, so the use case
    loses nothing.

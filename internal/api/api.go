@@ -25,6 +25,10 @@ type Deps struct {
 	Caps          sniff.Caps
 	Quota         int64
 
+	// Private is TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted at all, and
+	// an upload's url is null. The zero value is the public instance.
+	Private bool
+
 	// Version is already resolved to bare semver or "dev"; Commit is the
 	// 40-hex sha or "" (reported as null).
 	Version string
@@ -44,6 +48,10 @@ type api struct{ Deps }
 // /m/{file} is one pattern rather than /m/{hash} plus /m/{hash}.{ext}
 // because a ServeMux wildcard must be a whole path segment; the handler
 // splits on the dot. A GET pattern also answers HEAD.
+//
+// On a private instance /m/ is not registered, so every /m/ path is the
+// mux's 404 whether or not the blob exists: there is no handler to get
+// wrong.
 func NewRouter(d Deps) http.Handler {
 	if d.Now == nil {
 		d.Now = time.Now
@@ -59,7 +67,9 @@ func NewRouter(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/uploads/{id}", a.auth(a.get))
 	mux.HandleFunc("DELETE /v1/uploads/{id}", a.auth(a.delete))
 
-	mux.HandleFunc("GET /m/{file}", a.media)
+	if !d.Private {
+		mux.HandleFunc("GET /m/{file}", a.media)
+	}
 
 	return a.logRequests(mux)
 }

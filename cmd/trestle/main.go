@@ -109,7 +109,8 @@ usage:
   trestle sweep                         one sweep pass on a stopped service; refuses while serve runs
   trestle token mint --name <consumer>  print a new token to stdout, name=sha256 to stderr
   trestle token hash                    read a token on stdin, print its sha256 hex
-  trestle upload <file> [--ttl 30d]     upload a file, print its public URL
+  trestle upload <file> [--ttl 30d]     upload a file, print its public URL (its
+                                        sha256 on a private instance)
   trestle version                       print the build version and commit
 
 ` + "`trestle token mint --name x > token`" + ` captures only the secret; the
@@ -119,8 +120,12 @@ server configuration is env-only, TRESTLE_-prefixed. There are no config files.
 
   TRESTLE_PORT                   listen port. Default 4014.
   TRESTLE_DATA_DIR               where blobs, index and tmp live. Required.
+  TRESTLE_PUBLIC_SERVE           true | false. Default true. false runs a private
+                                 instance: /m/ is not mounted, uploads carry
+                                 "url": null, reads go through the API.
   TRESTLE_PUBLIC_BASE_URL        scheme+host that /m/ URLs are built on, no
-                                 trailing slash. Required.
+                                 trailing slash. Required when public; must
+                                 be unset when TRESTLE_PUBLIC_SERVE=false.
   TRESTLE_TOKENS                 name=sha256hex,… — hashes, never tokens. Required.
   TRESTLE_MAX_IMAGE_BYTES        cap for png/jpeg/webp/gif/svg. Default 10485760.
   TRESTLE_MAX_VIDEO_BYTES        cap for mp4/webm. Default 104857600.
@@ -164,6 +169,7 @@ func setup(cfg config.Config, logger *slog.Logger) (deps, error) {
 		Blobs:         blobs,
 		Tokens:        cfg.Tokens,
 		PublicBaseURL: cfg.PublicBaseURL,
+		Private:       cfg.Private,
 		Caps:          sniff.Caps{Image: cfg.MaxImageBytes, Video: cfg.MaxVideoBytes},
 		Quota:         cfg.QuotaBytesPerToken,
 		Version:       buildVersion(),
@@ -489,8 +495,10 @@ func runUpload(args []string, stdout io.Writer) error {
 	return err
 }
 
-// upload POSTs the file's raw bytes and returns the public URL. Errors quote
-// the server's error body, never the token.
+// upload POSTs the file's raw bytes and returns the public URL, or, from a
+// private instance whose url is null, the sha256: that is the handle the
+// caller reads the blob back by. Errors quote the server's error body, never
+// the token.
 func upload(ctx context.Context, client *http.Client, base, token, path, ttl string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -531,10 +539,20 @@ func upload(ctx context.Context, client *http.Client, base, token, path, ttl str
 		return "", fmt.Errorf("upload: unexpected status %s", resp.Status)
 	}
 	var ok struct {
-		URL string `json:"url"`
+		URL    *string `json:"url"`
+		SHA256 string  `json:"sha256"`
 	}
-	if err := json.Unmarshal(body, &ok); err != nil || ok.URL == "" {
+	if err := json.Unmarshal(body, &ok); err != nil {
 		return "", errors.New("upload: response carried no url")
 	}
-	return ok.URL, nil
+	if ok.URL == nil {
+		if !blob.ValidHash(ok.SHA256) {
+			return "", errors.New("upload: response carried neither a url nor a sha256")
+		}
+		return ok.SHA256, nil
+	}
+	if *ok.URL == "" {
+		return "", errors.New("upload: response carried no url")
+	}
+	return *ok.URL, nil
 }

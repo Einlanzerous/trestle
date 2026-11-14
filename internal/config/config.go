@@ -44,11 +44,13 @@ type Token struct {
 
 // Config is the process-wide configuration. Every field is set from exactly
 // one environment variable, so `grep TRESTLE_` over this file is the complete
-// list.
+// list. Private is the inverse of its variable so that a zero Config, like
+// an unset TRESTLE_PUBLIC_SERVE, is the public instance.
 type Config struct {
 	Addr               string        // TRESTLE_PORT
 	DataDir            string        // TRESTLE_DATA_DIR
-	PublicBaseURL      string        // TRESTLE_PUBLIC_BASE_URL
+	PublicBaseURL      string        // TRESTLE_PUBLIC_BASE_URL; "" on a private instance
+	Private            bool          // TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted
 	Tokens             []Token       // TRESTLE_TOKENS
 	MaxImageBytes      int64         // TRESTLE_MAX_IMAGE_BYTES
 	MaxVideoBytes      int64         // TRESTLE_MAX_VIDEO_BYTES
@@ -82,7 +84,18 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("config: TRESTLE_DATA_DIR is required")
 	}
 
-	if c.PublicBaseURL, err = parseBaseURL(os.Getenv("TRESTLE_PUBLIC_BASE_URL")); err != nil {
+	if c.Private, err = parsePrivate(os.Getenv("TRESTLE_PUBLIC_SERVE")); err != nil {
+		return c, err
+	}
+	if c.Private {
+		// A private instance builds no public URL, so a base URL here is a
+		// sign the operator thinks it is the public one. Refusing turns a
+		// switch flipped by accident into a boot failure rather than every
+		// pasted link quietly answering 404.
+		if v := strings.TrimSpace(os.Getenv("TRESTLE_PUBLIC_BASE_URL")); v != "" {
+			return c, fmt.Errorf("config: TRESTLE_PUBLIC_BASE_URL is set but TRESTLE_PUBLIC_SERVE is false; a private instance serves no public URL, so unset one of them")
+		}
+	} else if c.PublicBaseURL, err = parseBaseURL(os.Getenv("TRESTLE_PUBLIC_BASE_URL")); err != nil {
 		return c, err
 	}
 
@@ -119,6 +132,22 @@ func Load() (Config, error) {
 	}
 
 	return c, nil
+}
+
+// parsePrivate reads TRESTLE_PUBLIC_SERVE. Unset is true, today's public
+// instance; anything strconv.ParseBool does not accept refuses the boot,
+// because guessing at a switch that decides what the internet can fetch is
+// the wrong way round.
+func parsePrivate(raw string) (bool, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return false, nil
+	}
+	public, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("config: TRESTLE_PUBLIC_SERVE %q is not true or false", v)
+	}
+	return !public, nil
 }
 
 // parseBaseURL insists on scheme+host and nothing else, because the upload

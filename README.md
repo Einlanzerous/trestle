@@ -40,6 +40,20 @@ filename. Anything else is refused with **415**.
 | `image/png` `image/jpeg` `image/webp` `image/gif` `image/svg+xml` | png jpg webp gif svg | `TRESTLE_MAX_IMAGE_BYTES` |
 | `video/mp4` `video/webm` | mp4 webm | `TRESTLE_MAX_VIDEO_BYTES` |
 
+That is the default. An instance can choose its own list with
+`TRESTLE_ALLOWED_TYPES` (comma-separated MIME types), which can also name
+four types recognised from the ISO-BMFF `ftyp` brand and accepted nowhere by
+default:
+
+| type | ext | cap |
+|---|---|---|
+| `image/heic` `image/heif` `image/avif` | heic heif avif | `TRESTLE_MAX_IMAGE_BYTES` |
+| `video/quicktime` | mov | `TRESTLE_MAX_VIDEO_BYTES` |
+
+An `ftyp` brand Trestle does not know is refused, never guessed at; anything
+that already sniffed as `video/mp4` still does. The brand rules are in the
+design of record.
+
 SVGs are served with `Content-Disposition: attachment` and a sandboxing CSP.
 They still embed with `<img>` and in Markdown.
 
@@ -86,6 +100,7 @@ never appear in logs or errors.
 | `TRESTLE_PUBLIC_SERVE` | `true` | `false` runs a private instance (below) |
 | `TRESTLE_PUBLIC_BASE_URL` | required when public | scheme+host, no trailing slash; must be unset when `TRESTLE_PUBLIC_SERVE=false` |
 | `TRESTLE_TOKENS` | required | `name=sha256hex,name=sha256hex,…` |
+| `TRESTLE_ALLOWED_TYPES` | the seven above | comma-separated MIME types; an unknown one refuses the boot |
 | `TRESTLE_MAX_IMAGE_BYTES` | `10485760` | |
 | `TRESTLE_MAX_VIDEO_BYTES` | `104857600` | |
 | `TRESTLE_QUOTA_BYTES_PER_TOKEN` | `2147483648` | |

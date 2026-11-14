@@ -120,10 +120,10 @@ func (a *api) upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "empty_body", "the upload has no bytes")
 		return
 	}
-	typ, ok := sniff.Detect(head)
+	typ, ok := a.Allowed.Detect(head)
 	if !ok {
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_type",
-			fmt.Sprintf("detected %s; allowed: png, jpeg, webp, gif, svg, mp4, webm", typ.MIME))
+			fmt.Sprintf("detected %s; allowed: %s", typ.MIME, a.Allowed.Names()))
 		return
 	}
 

@@ -127,8 +127,13 @@ server configuration is env-only, TRESTLE_-prefixed. There are no config files.
                                  trailing slash. Required when public; must
                                  be unset when TRESTLE_PUBLIC_SERVE=false.
   TRESTLE_TOKENS                 name=sha256hex,… — hashes, never tokens. Required.
-  TRESTLE_MAX_IMAGE_BYTES        cap for png/jpeg/webp/gif/svg. Default 10485760.
-  TRESTLE_MAX_VIDEO_BYTES        cap for mp4/webm. Default 104857600.
+  TRESTLE_ALLOWED_TYPES          comma-separated MIME types this instance holds.
+                                 Default image/png,image/jpeg,image/webp,
+                                 image/gif,image/svg+xml,video/mp4,video/webm.
+                                 Also recognised: image/heic, image/heif,
+                                 image/avif, video/quicktime.
+  TRESTLE_MAX_IMAGE_BYTES        cap for image types. Default 10485760.
+  TRESTLE_MAX_VIDEO_BYTES        cap for mp4/webm/quicktime. Default 104857600.
   TRESTLE_QUOTA_BYTES_PER_TOKEN  bytes a token may own. Default 2147483648.
   TRESTLE_SWEEP_INTERVAL         how often serve reclaims expired blobs. Default 1h.
   TRESTLE_LOG_LEVEL              debug | info | warn | error. Default info.
@@ -171,6 +176,7 @@ func setup(cfg config.Config, logger *slog.Logger) (deps, error) {
 		PublicBaseURL: cfg.PublicBaseURL,
 		Private:       cfg.Private,
 		Caps:          sniff.Caps{Image: cfg.MaxImageBytes, Video: cfg.MaxVideoBytes},
+		Allowed:       cfg.AllowedTypes,
 		Quota:         cfg.QuotaBytesPerToken,
 		Version:       buildVersion(),
 		Commit:        buildCommit(),
@@ -277,7 +283,8 @@ func serve(ctx context.Context, d deps, ln net.Listener) error {
 		}
 	}()
 
-	d.logger.Info("serving", "addr", ln.Addr().String(), "version", buildVersion())
+	d.logger.Info("serving", "addr", ln.Addr().String(), "version", buildVersion(),
+		"public_serve", !d.cfg.Private, "allowed_types", d.cfg.AllowedTypes.MIMEs())
 	var serveErr error
 	select {
 	case serveErr = <-errCh:

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Einlanzerous/trestle/internal/sniff"
 )
 
 // DefaultPort is the next free slot in the estate's 40xx block after
@@ -47,18 +49,19 @@ type Token struct {
 // list. Private is the inverse of its variable so that a zero Config, like
 // an unset TRESTLE_PUBLIC_SERVE, is the public instance.
 type Config struct {
-	Addr               string        // TRESTLE_PORT
-	DataDir            string        // TRESTLE_DATA_DIR
-	PublicBaseURL      string        // TRESTLE_PUBLIC_BASE_URL; "" on a private instance
-	Private            bool          // TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted
-	Tokens             []Token       // TRESTLE_TOKENS
-	MaxImageBytes      int64         // TRESTLE_MAX_IMAGE_BYTES
-	MaxVideoBytes      int64         // TRESTLE_MAX_VIDEO_BYTES
-	QuotaBytesPerToken int64         // TRESTLE_QUOTA_BYTES_PER_TOKEN
-	SweepInterval      time.Duration // TRESTLE_SWEEP_INTERVAL
-	LogLevel           slog.Level    // TRESTLE_LOG_LEVEL
-	LogFormat          string        // TRESTLE_LOG_FORMAT
-	ShutdownGrace      time.Duration // TRESTLE_SHUTDOWN_GRACE
+	Addr               string          // TRESTLE_PORT
+	DataDir            string          // TRESTLE_DATA_DIR
+	PublicBaseURL      string          // TRESTLE_PUBLIC_BASE_URL; "" on a private instance
+	Private            bool            // TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted
+	Tokens             []Token         // TRESTLE_TOKENS
+	AllowedTypes       sniff.AllowList // TRESTLE_ALLOWED_TYPES; nil is the default list
+	MaxImageBytes      int64           // TRESTLE_MAX_IMAGE_BYTES
+	MaxVideoBytes      int64           // TRESTLE_MAX_VIDEO_BYTES
+	QuotaBytesPerToken int64           // TRESTLE_QUOTA_BYTES_PER_TOKEN
+	SweepInterval      time.Duration   // TRESTLE_SWEEP_INTERVAL
+	LogLevel           slog.Level      // TRESTLE_LOG_LEVEL
+	LogFormat          string          // TRESTLE_LOG_FORMAT
+	ShutdownGrace      time.Duration   // TRESTLE_SHUTDOWN_GRACE
 }
 
 // Load reads the environment and validates it, or returns the first error.
@@ -101,6 +104,10 @@ func Load() (Config, error) {
 
 	if c.Tokens, err = ParseTokens(os.Getenv("TRESTLE_TOKENS")); err != nil {
 		return c, err
+	}
+
+	if c.AllowedTypes, err = sniff.ParseAllowList(os.Getenv("TRESTLE_ALLOWED_TYPES")); err != nil {
+		return c, fmt.Errorf("config: TRESTLE_ALLOWED_TYPES: %w", err)
 	}
 
 	if c.MaxImageBytes, err = positiveBytes("TRESTLE_MAX_IMAGE_BYTES", os.Getenv("TRESTLE_MAX_IMAGE_BYTES"), DefaultMaxImageBytes); err != nil {

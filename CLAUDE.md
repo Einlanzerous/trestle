@@ -23,7 +23,9 @@ the storage layout or the serve headers.
   `<data>/index/`, in memory at boot, atomic writes.
 - `internal/api/` — the HTTP surface: `/v1/*` (bearer-gated), `/m/*`
   (public; not mounted on a private instance), probes.
-- `internal/sniff/` — content-type detection and the allow-list.
+- `internal/sniff/` — content-type detection (incl. the ISO-BMFF `ftyp`
+  brand table) and the per-instance allow-list (`TRESTLE_ALLOWED_TYPES`;
+  the default is v1's list and must stay so).
 - `deploy/` — the `Dockerfile` and `README.md` (decisions the construct-server
   block needs). **No compose fragment and no Traefik labels here**: the block
   and every router live in `construct-server`, and a second copy is the one

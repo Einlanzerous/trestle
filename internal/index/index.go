@@ -80,6 +80,12 @@ type Index struct {
 	fs   durable.FS
 	mu   sync.Mutex
 	recs map[string]*Record
+	// stale holds every hash whose rename or unlink in index/ succeeded but
+	// whose fsync of index/ failed: disk may now differ from memory in either
+	// direction (a removed record still in memory, a rewritten one not yet
+	// in it). Add never answers from memory alone for such a hash; it
+	// rewrites and syncs the record, which clears it.
+	stale map[string]bool
 }
 
 // Open creates dir if needed and loads every record in it. A record that
@@ -98,7 +104,7 @@ func OpenFS(dir string, fsys durable.FS) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("index: %w", err)
 	}
-	ix := &Index{dir: dir, fs: fsys, recs: map[string]*Record{}}
+	ix := &Index{dir: dir, fs: fsys, recs: map[string]*Record{}, stale: map[string]bool{}}
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
@@ -224,7 +230,7 @@ func (ix *Index) Add(u Upload, quota int64, now time.Time, commit func() error) 
 	if err := commit(); err != nil {
 		return Record{}, false, err
 	}
-	if existed && sameRecord(*cur, next) {
+	if existed && sameRecord(*cur, next) && !ix.stale[next.SHA256] {
 		return next.clone(), true, nil
 	}
 	if err := ix.writeLocked(next); err != nil {
@@ -322,6 +328,9 @@ func (ix *Index) Sweep(now time.Time, del func(hash string) error) ([]Record, er
 	if err := ix.fs.SyncDir(ix.dir); err != nil {
 		// Nothing is known durable: keep the records in memory and every
 		// blob on disk; the next sweep unlinks (a no-op) and syncs again.
+		for _, hash := range unlinked {
+			ix.stale[hash] = true
+		}
 		return nil, firstErr(first, fmt.Errorf("index: %w", err))
 	}
 	// Deterministic order, so the blob deletes are as predictable as the
@@ -331,6 +340,7 @@ func (ix *Index) Sweep(now time.Time, del func(hash string) error) ([]Record, er
 	for _, hash := range unlinked {
 		removed = append(removed, ix.recs[hash].clone())
 		delete(ix.recs, hash)
+		delete(ix.stale, hash)
 		if err := del(hash); err != nil {
 			first = firstErr(first, err)
 		}
@@ -375,10 +385,13 @@ func (ix *Index) writeLocked(r Record) error {
 		return fmt.Errorf("index: %w", err)
 	}
 	// After a failure here the new record is on disk (it would load at the
-	// next boot) but not in memory; the caller's retry rewrites it.
+	// next boot) but not in memory: the hash is stale until a write or
+	// removal of it syncs.
 	if err := ix.fs.SyncDir(ix.dir); err != nil {
+		ix.stale[r.SHA256] = true
 		return fmt.Errorf("index: %w", err)
 	}
+	delete(ix.stale, r.SHA256)
 	return nil
 }
 
@@ -389,9 +402,13 @@ func (ix *Index) removeLocked(hash string) error {
 		return err
 	}
 	if err := ix.fs.SyncDir(ix.dir); err != nil {
+		// The record may be gone from disk while memory still answers for
+		// it; a re-upload must rewrite it, not find it unchanged.
+		ix.stale[hash] = true
 		return fmt.Errorf("index: %w", err)
 	}
 	delete(ix.recs, hash)
+	delete(ix.stale, hash)
 	return nil
 }
 

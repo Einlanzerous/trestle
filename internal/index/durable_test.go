@@ -310,3 +310,63 @@ func TestOpenSyncsWhatItLoads(t *testing.T) {
 		t.Fatalf("Open calls = %q, want %q", got, want)
 	}
 }
+
+// After an index/ fsync fails behind a removal or a rewrite, memory and disk
+// may disagree. A re-upload that would leave memory unchanged must still
+// rewrite and sync the record, or it answers 201 for a record the next boot
+// does not have (and reconcile then deletes the blob).
+func TestReuploadAfterFailedSyncRewritesTheRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		owners []string // uploaders, in order
+		disown string
+	}{
+		{"last owner removed", []string{"alice"}, "alice"},
+		{"one of two owners removed", []string{"alice", "bob"}, "alice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			var h string
+			for _, o := range tc.owners {
+				var err error
+				if h, err = s.upload(t, "only copy", o, nil, t0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.rec.FailSyncDir = map[string]error{"index": errors.New("EMFILE")}
+			if err := s.ix.Disown(h, tc.disown, t0, func() error { return s.del(h) }); err == nil {
+				t.Fatal("disown succeeded with index/ unsynced")
+			}
+			s.rec.FailSyncDir = nil
+			s.rec.Reset()
+
+			// Memory still has the old record, so this upload changes nothing
+			// there; it must write anyway.
+			if _, err := s.upload(t, "only copy", tc.disown, nil, t0); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(s.rec.Ops(), "fsyncdir index") {
+				t.Fatalf("re-upload of a stale record answered from memory: %q", s.rec.Ops())
+			}
+
+			again, err := Open(s.ix.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, ok := again.Get(h, t0)
+			if !ok || !slices.Equal(r.Owners, tc.owners) {
+				t.Fatalf("after reboot: record=%+v ok=%v, want owners %v", r, ok, tc.owners)
+			}
+
+			// Once synced, the hash is no longer stale: an unchanged re-upload
+			// writes nothing again.
+			s.rec.Reset()
+			if _, err := s.upload(t, "only copy", tc.disown, nil, t0); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(s.rec.Ops(), "fsyncdir index") {
+				t.Fatalf("stale mark not cleared by the sync: %q", s.rec.Ops())
+			}
+		})
+	}
+}

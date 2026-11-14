@@ -92,12 +92,16 @@ order:
 
 A rename or unlink is only durable once its directory is fsynced; fsyncing
 the file is not enough. A 200/201 that changed no record (the same owner
-re-uploading the same bytes) writes nothing to `index/`: the record in
-memory is always one that is already durable, because memory changes only
-after the fsync succeeds, and `index.Open` fsyncs `index/` once at boot (a
-dead process may have left a renamed but unsynced record). A failed fsync
-fails the request with 500 and leaves memory at the old state, so a retry
-writes and syncs again.
+re-uploading the same bytes) writes nothing to `index/`, and that is safe
+only because the record in memory is then the durable one: memory changes
+only after the fsync succeeds, and `index.Open` fsyncs `index/` once at boot
+(a dead process may have left a renamed but unsynced record). A failed
+`index/` fsync after a successful rename or unlink fails the request with
+500, leaves memory at the old state, and marks the hash stale: disk may now
+differ from memory either way (a removed record memory still holds, a
+rewritten one it does not). An upload of a stale hash always rewrites and
+syncs its record, never answers from memory, and a write or removal that
+syncs clears the mark.
 
 **Removals.** `DELETE` of the last owner and the sweep unlink the record,
 fsync `index/` (the sweep once for all the records it removes), and only

@@ -39,7 +39,7 @@ func (a *api) media(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such media")
 		return
 	}
-	a.serveBlob(w, r, hash, rec, true)
+	a.serveBlob(w, r, hash, rec, true, "no such media")
 }
 
 // blobRead is GET/HEAD /v1/blobs/{sha256}: the authenticated read, for the
@@ -60,21 +60,23 @@ func (a *api) blobRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such blob")
 		return
 	}
-	a.serveBlob(w, r, hash, rec, false)
+	a.serveBlob(w, r, hash, rec, false, "no such blob")
 }
 
 // serveBlob writes the bytes of a record already found live, with the
 // headers both read paths share. public picks the /m/ contract (shared
 // caches, cross-origin embedding) or the authenticated one (private cache
-// that revalidates every use, same-origin, no CORS).
-func (a *api) serveBlob(w http.ResponseWriter, r *http.Request, hash string, rec index.Record, public bool) {
+// that revalidates every use, same-origin, no CORS). notFound is the
+// caller's own 404 message, so a record whose bytes are missing answers the
+// same as an unknown hash on that route.
+func (a *api) serveBlob(w http.ResponseWriter, r *http.Request, hash string, rec index.Record, public bool, notFound string) {
 	ri := info(r)
 	ri.hash, ri.owners = hash, rec.Owners
 
 	f, _, err := a.Blobs.Open(r.Context(), hash)
 	if errors.Is(err, blob.ErrNotFound) {
 		a.Logger.Warn("record without blob", "sha256", hash)
-		writeError(w, http.StatusNotFound, "not_found", "no such media")
+		writeError(w, http.StatusNotFound, "not_found", notFound)
 		return
 	}
 	if err != nil {

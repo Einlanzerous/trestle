@@ -16,7 +16,11 @@ import (
 )
 
 // HeadSize is how much of an upload is read before deciding: all that
-// http.DetectContentType looks at.
+// http.DetectContentType looks at. The ftyp brand table and the classic
+// QuickTime box walk (GENZO-26) look at no more. The real layouts show their
+// evidence in the first 16–32 bytes; a classic file whose evidence lies past
+// this window (a free box of 500+ bytes before mdat) is refused rather than
+// the window grown for it.
 const HeadSize = 512
 
 // Class picks which size cap applies.
@@ -46,6 +50,13 @@ var (
 	QuickTime = Type{"video/quicktime", "mov", Video}
 )
 
+// The 3GPP and 3GPP2 types recognised from ftyp brands (GENZO-26). Off by
+// default, like the GENZO-7 types.
+var (
+	ThreeGPP  = Type{"video/3gpp", "3gp", Video}
+	ThreeGPP2 = Type{"video/3gpp2", "3g2", Video}
+)
+
 // known is every type Trestle can recognise, in the order a 415 lists them.
 var known = []Type{
 	{"image/png", "png", Image},
@@ -59,6 +70,8 @@ var known = []Type{
 	HEIF,
 	AVIF,
 	QuickTime,
+	ThreeGPP,
+	ThreeGPP2,
 }
 
 // AllowList is the set of types an instance will hold, keyed by MIME type.
@@ -203,6 +216,12 @@ func identify(head []byte) (Type, bool) {
 			return t, true
 		}
 		return Type{MIME: mime}, false
+	}
+	// Classic QuickTime (GENZO-26) last: it only ever sees a head every
+	// earlier check refused, and its rule (quicktime.go) is strict enough
+	// that text and arbitrary binary do not pass.
+	if isClassicQuickTime(head) {
+		return QuickTime, true
 	}
 	return Type{MIME: mime}, false
 }

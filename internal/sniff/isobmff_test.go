@@ -83,7 +83,6 @@ func TestDetectUnknownFtypIsRefused(t *testing.T) {
 	all := allowAll(t)
 	for name, head := range map[string][]byte{
 		"canon cr3 (RAW, out of scope)": ftyp("crx ", 1, "crx ", "isom"),
-		"3gp":                           ftyp("3gp4", 0, "isom", "3gp4"),
 		"isom without mp4":              ftyp("isom", 0x200, "isom", "iso2", "avc1"),
 		"heim (not in the table)":       ftyp("heim", 0, "mif1", "heim"),
 		"jpeg 2000":                     ftyp("jp2 ", 0, "jp2 "),
@@ -112,6 +111,10 @@ func TestDefaultListRefusesNewTypes(t *testing.T) {
 		"heif": {plainHEIF, "image/heif"},
 		"avif": {libavifAVIF, "image/avif"},
 		"mov":  {iphoneMOV, "video/quicktime"},
+		// GENZO-26: refused as what they are, no longer as octet-stream.
+		"classic mov": {livePhotoMOV, "video/quicktime"},
+		"3gp":         {sample3GP, "video/3gpp"},
+		"3g2":         {ftyp("3g2a", 0, "3g2a"), "video/3gpp2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, l := range []AllowList{nil, DefaultAllowList()} {
@@ -178,6 +181,7 @@ func FuzzDefaultListAgreesWithV1(f *testing.F) {
 	for _, h := range [][]byte{
 		pngHead, mp4Head, webmHead, svgHead, iphoneHEIC, iphoneMOV, libavifAVIF,
 		[]byte("<!--ftyp-->\n<svg/>"), []byte("<?a ftyp?><svg/>"),
+		livePhotoMOV, moovFirstMOV, sample3GP,
 	} {
 		f.Add(h)
 	}
@@ -213,7 +217,12 @@ func TestParseAllowList(t *testing.T) {
 		t.Fatal("svg allowed by a list without it")
 	}
 
-	for _, bad := range []string{"image/x-canon-cr2", "heic", "image/png,,image/gif", "image/svg", "video/x-matroska"} {
+	l, err = ParseAllowList("video/3gpp2,video/3gpp,video/quicktime")
+	if err != nil || l.Names() != "quicktime, 3gpp, 3gpp2" {
+		t.Fatalf("3gpp list = %s, %v", l.Names(), err)
+	}
+
+	for _, bad := range []string{"image/x-canon-cr2", "heic", "image/png,,image/gif", "image/svg", "video/x-matroska", "video/3gp", "video/3g2"} {
 		if _, err := ParseAllowList(bad); err == nil {
 			t.Errorf("ParseAllowList(%q) accepted", bad)
 		}
@@ -227,7 +236,9 @@ func TestNewTypesUseTheirClassCap(t *testing.T) {
 			t.Errorf("%s cap = %d, want the image cap", typ.MIME, c.For(typ))
 		}
 	}
-	if c.For(QuickTime) != 100 {
-		t.Errorf("quicktime cap = %d, want the video cap", c.For(QuickTime))
+	for _, typ := range []Type{QuickTime, ThreeGPP, ThreeGPP2} {
+		if c.For(typ) != 100 {
+			t.Errorf("%s cap = %d, want the video cap", typ.MIME, c.For(typ))
+		}
 	}
 }

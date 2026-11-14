@@ -132,9 +132,10 @@ server configuration is env-only, TRESTLE_-prefixed. There are no config files.
                                  Default image/png,image/jpeg,image/webp,
                                  image/gif,image/svg+xml,video/mp4,video/webm.
                                  Also recognised: image/heic, image/heif,
-                                 image/avif, video/quicktime.
+                                 image/avif, video/quicktime, video/3gpp,
+                                 video/3gpp2.
   TRESTLE_MAX_IMAGE_BYTES        cap for image types. Default 10485760.
-  TRESTLE_MAX_VIDEO_BYTES        cap for mp4/webm/quicktime. Default 104857600.
+  TRESTLE_MAX_VIDEO_BYTES        cap for video types. Default 104857600.
   TRESTLE_QUOTA_BYTES_PER_TOKEN  bytes a token may own. Default 2147483648.
   TRESTLE_SWEEP_INTERVAL         how often serve reclaims expired blobs. Default 1h.
   TRESTLE_LOG_LEVEL              debug | info | warn | error. Default info.

@@ -222,14 +222,14 @@ func TestTokenQuotas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.QuotaFor("agent") != 5000 || c.QuotaFor("derivs") != 300 || c.QuotaFor("other") != 1000 {
-		t.Fatalf("QuotaFor = %d %d %d", c.QuotaFor("agent"), c.QuotaFor("derivs"), c.QuotaFor("other"))
+	if len(c.QuotaBytesByToken) != 2 || c.QuotaBytesByToken["agent"] != 5000 || c.QuotaBytesByToken["derivs"] != 300 || c.QuotaBytesPerToken != 1000 {
+		t.Fatalf("quotas = %v, per token %d", c.QuotaBytesByToken, c.QuotaBytesPerToken)
 	}
 
 	// A partial list: the unnamed token falls back.
 	env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = "derivs=300"
 	setEnv(t, env)
-	if c, err = Load(); err != nil || c.QuotaFor("agent") != 1000 || c.QuotaFor("derivs") != 300 {
+	if c, err = Load(); err != nil || len(c.QuotaBytesByToken) != 1 || c.QuotaBytesByToken["derivs"] != 300 || c.QuotaBytesPerToken != 1000 {
 		t.Fatalf("partial: %v %+v", err, c.QuotaBytesByToken)
 	}
 }
@@ -241,7 +241,7 @@ func TestTokenQuotasUnsetChangesNothing(t *testing.T) {
 		env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = v
 		setEnv(t, env)
 		c, err := Load()
-		if err != nil || c.QuotaBytesByToken != nil || c.QuotaFor("agent") != 2<<30 {
+		if err != nil || c.QuotaBytesByToken != nil || c.QuotaBytesPerToken != 2<<30 {
 			t.Fatalf("%q: %v %+v", v, err, c)
 		}
 	}

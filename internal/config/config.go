@@ -218,15 +218,6 @@ func ParseTokens(raw string) ([]Token, error) {
 	return out, nil
 }
 
-// QuotaFor is the quota in bytes for the named token: its own entry in
-// TRESTLE_QUOTA_BYTES_BY_TOKEN, else TRESTLE_QUOTA_BYTES_PER_TOKEN.
-func (c Config) QuotaFor(name string) int64 {
-	if q, ok := c.QuotaBytesByToken[name]; ok {
-		return q
-	}
-	return c.QuotaBytesPerToken
-}
-
 // ParseTokenQuotas parses `name=bytes,name=bytes,…` (TRESTLE_QUOTA_BYTES_BY_TOKEN).
 //
 // Unset or blank is nil: every token takes TRESTLE_QUOTA_BYTES_PER_TOKEN. A

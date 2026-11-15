@@ -210,3 +210,64 @@ func TestAllowedTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenQuotas(t *testing.T) {
+	two := "agent=" + goodHash + ",derivs=" + strings.Repeat("ab", 32)
+	env := required()
+	env["TRESTLE_TOKENS"] = two
+	env["TRESTLE_QUOTA_BYTES_PER_TOKEN"] = "1000"
+	env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = " agent=5000 , derivs=300 "
+	setEnv(t, env)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.QuotaBytesByToken) != 2 || c.QuotaBytesByToken["agent"] != 5000 || c.QuotaBytesByToken["derivs"] != 300 || c.QuotaBytesPerToken != 1000 {
+		t.Fatalf("quotas = %v, per token %d", c.QuotaBytesByToken, c.QuotaBytesPerToken)
+	}
+
+	// A partial list: the unnamed token falls back.
+	env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = "derivs=300"
+	setEnv(t, env)
+	if c, err = Load(); err != nil || len(c.QuotaBytesByToken) != 1 || c.QuotaBytesByToken["derivs"] != 300 || c.QuotaBytesPerToken != 1000 {
+		t.Fatalf("partial: %v %+v", err, c.QuotaBytesByToken)
+	}
+}
+
+// Unset (or blank) leaves today's behaviour: one quota for every token.
+func TestTokenQuotasUnsetChangesNothing(t *testing.T) {
+	for _, v := range []string{"", "  "} {
+		env := required()
+		env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = v
+		setEnv(t, env)
+		c, err := Load()
+		if err != nil || c.QuotaBytesByToken != nil || c.QuotaBytesPerToken != 2<<30 {
+			t.Fatalf("%q: %v %+v", v, err, c)
+		}
+	}
+}
+
+func TestTokenQuotasRefusals(t *testing.T) {
+	for name, value := range map[string]string{
+		"unknown name":   "ghost=100",
+		"duplicate":      "agent=100,agent=200",
+		"zero":           "agent=0",
+		"negative":       "agent=-5",
+		"not a number":   "agent=lots",
+		"empty value":    "agent=",
+		"no equals":      "agent",
+		"empty entry":    "agent=100,",
+		"bad name":       "ag ent=100",
+		"over the bound": "agent=1099511627777",
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := required()
+			env["TRESTLE_QUOTA_BYTES_BY_TOKEN"] = value
+			setEnv(t, env)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "TRESTLE_QUOTA_BYTES_BY_TOKEN") {
+				t.Fatalf("Load() = %v, want an error naming TRESTLE_QUOTA_BYTES_BY_TOKEN", err)
+			}
+		})
+	}
+}

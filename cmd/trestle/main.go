@@ -137,6 +137,9 @@ server configuration is env-only, TRESTLE_-prefixed. There are no config files.
   TRESTLE_MAX_IMAGE_BYTES        cap for image types. Default 10485760.
   TRESTLE_MAX_VIDEO_BYTES        cap for video types. Default 104857600.
   TRESTLE_QUOTA_BYTES_PER_TOKEN  bytes a token may own. Default 2147483648.
+  TRESTLE_QUOTA_BYTES_BY_TOKEN   name=bytes,… — a quota of its own for the named
+                                 tokens (each must be in TRESTLE_TOKENS); every
+                                 other token takes the one above. Default unset.
   TRESTLE_SWEEP_INTERVAL         how often serve reclaims expired blobs. Default 1h.
   TRESTLE_LOG_LEVEL              debug | info | warn | error. Default info.
   TRESTLE_LOG_FORMAT             json | text. Default json.
@@ -180,6 +183,7 @@ func setup(cfg config.Config, logger *slog.Logger) (deps, error) {
 		Caps:          sniff.Caps{Image: cfg.MaxImageBytes, Video: cfg.MaxVideoBytes},
 		Allowed:       cfg.AllowedTypes,
 		Quota:         cfg.QuotaBytesPerToken,
+		Quotas:        cfg.QuotaBytesByToken,
 		Version:       buildVersion(),
 		Commit:        buildCommit(),
 		Ready:         func() error { return ready(blobs.TempDir(), indexDir) },

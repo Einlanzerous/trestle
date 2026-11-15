@@ -49,19 +49,20 @@ type Token struct {
 // list. Private is the inverse of its variable so that a zero Config, like
 // an unset TRESTLE_PUBLIC_SERVE, is the public instance.
 type Config struct {
-	Addr               string          // TRESTLE_PORT
-	DataDir            string          // TRESTLE_DATA_DIR
-	PublicBaseURL      string          // TRESTLE_PUBLIC_BASE_URL; "" on a private instance
-	Private            bool            // TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted
-	Tokens             []Token         // TRESTLE_TOKENS
-	AllowedTypes       sniff.AllowList // TRESTLE_ALLOWED_TYPES; nil is the default list
-	MaxImageBytes      int64           // TRESTLE_MAX_IMAGE_BYTES
-	MaxVideoBytes      int64           // TRESTLE_MAX_VIDEO_BYTES
-	QuotaBytesPerToken int64           // TRESTLE_QUOTA_BYTES_PER_TOKEN
-	SweepInterval      time.Duration   // TRESTLE_SWEEP_INTERVAL
-	LogLevel           slog.Level      // TRESTLE_LOG_LEVEL
-	LogFormat          string          // TRESTLE_LOG_FORMAT
-	ShutdownGrace      time.Duration   // TRESTLE_SHUTDOWN_GRACE
+	Addr               string           // TRESTLE_PORT
+	DataDir            string           // TRESTLE_DATA_DIR
+	PublicBaseURL      string           // TRESTLE_PUBLIC_BASE_URL; "" on a private instance
+	Private            bool             // TRESTLE_PUBLIC_SERVE=false: /m/ is not mounted
+	Tokens             []Token          // TRESTLE_TOKENS
+	AllowedTypes       sniff.AllowList  // TRESTLE_ALLOWED_TYPES; nil is the default list
+	MaxImageBytes      int64            // TRESTLE_MAX_IMAGE_BYTES
+	MaxVideoBytes      int64            // TRESTLE_MAX_VIDEO_BYTES
+	QuotaBytesPerToken int64            // TRESTLE_QUOTA_BYTES_PER_TOKEN
+	QuotaBytesByToken  map[string]int64 // TRESTLE_QUOTA_BYTES_BY_TOKEN; nil when unset
+	SweepInterval      time.Duration    // TRESTLE_SWEEP_INTERVAL
+	LogLevel           slog.Level       // TRESTLE_LOG_LEVEL
+	LogFormat          string           // TRESTLE_LOG_FORMAT
+	ShutdownGrace      time.Duration    // TRESTLE_SHUTDOWN_GRACE
 }
 
 // Load reads the environment and validates it, or returns the first error.
@@ -117,6 +118,9 @@ func Load() (Config, error) {
 		return c, err
 	}
 	if c.QuotaBytesPerToken, err = positiveBytes("TRESTLE_QUOTA_BYTES_PER_TOKEN", os.Getenv("TRESTLE_QUOTA_BYTES_PER_TOKEN"), DefaultQuotaBytesPerToken); err != nil {
+		return c, err
+	}
+	if c.QuotaBytesByToken, err = ParseTokenQuotas(os.Getenv("TRESTLE_QUOTA_BYTES_BY_TOKEN"), c.Tokens); err != nil {
 		return c, err
 	}
 
@@ -210,6 +214,44 @@ func ParseTokens(raw string) ([]Token, error) {
 		}
 		names[name], hashes[t.Hash] = true, true
 		out = append(out, t)
+	}
+	return out, nil
+}
+
+// ParseTokenQuotas parses `name=bytes,name=bytes,…` (TRESTLE_QUOTA_BYTES_BY_TOKEN).
+//
+// Unset or blank is nil: every token takes TRESTLE_QUOTA_BYTES_PER_TOKEN. A
+// name that is not in tokens refuses the boot, because a typo here would
+// leave the token you meant to cap on the default, silently. Each value is
+// held to the same bounds as every other byte count, and a name twice is
+// refused rather than resolved by order.
+func ParseTokenQuotas(raw string, tokens []Token) (map[string]int64, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return nil, nil
+	}
+	known := map[string]bool{}
+	for _, t := range tokens {
+		known[t.Name] = true
+	}
+	out := map[string]int64{}
+	for i, entry := range strings.Split(v, ",") {
+		name, val, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		name, val = strings.TrimSpace(name), strings.TrimSpace(val)
+		if !ok || !ValidTokenName(name) {
+			return nil, fmt.Errorf("config: TRESTLE_QUOTA_BYTES_BY_TOKEN entry %d is not name=bytes with a token name of letters, digits, '-', '_' or '.'", i+1)
+		}
+		if !known[name] {
+			return nil, fmt.Errorf("config: TRESTLE_QUOTA_BYTES_BY_TOKEN names %q, which is not in TRESTLE_TOKENS", name)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("config: TRESTLE_QUOTA_BYTES_BY_TOKEN names %q twice", name)
+		}
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil || n < 1 || n > MaxBytesSetting {
+			return nil, fmt.Errorf("config: TRESTLE_QUOTA_BYTES_BY_TOKEN entry %q has %q, not a byte count between 1 and %d", name, val, int64(MaxBytesSetting))
+		}
+		out[name] = n
 	}
 	return out, nil
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/Einlanzerous/trestle/compare/v0.2.0...v0.3.0) (2026-11-15)
+
+
+### Features
+
+* **quota:** per-token quotas via TRESTLE_QUOTA_BYTES_BY_TOKEN (GENZO-50) ([#11](https://github.com/Einlanzerous/trestle/issues/11)) ([3c2452d](https://github.com/Einlanzerous/trestle/commit/3c2452d0d7a3ad72bc85f8221d376ff360b2d73d))
+* **sniff:** QuickTime without ftyp, and 3GP (GENZO-26) ([#8](https://github.com/Einlanzerous/trestle/issues/8)) ([d179f0a](https://github.com/Einlanzerous/trestle/commit/d179f0a6441c09bacdc08f882bae54e131146bc0))
+
+
+### Bug Fixes
+
+* **storage:** fsync directories after blob and record renames (GENZO-30) ([#10](https://github.com/Einlanzerous/trestle/issues/10)) ([a892731](https://github.com/Einlanzerous/trestle/commit/a892731a6ea3ac542b5075ee1a4064fa6e43b621))
+
 ## [0.2.0](https://github.com/Einlanzerous/trestle/compare/v0.1.0...v0.2.0) (2026-11-14)
 
 

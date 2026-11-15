@@ -14,6 +14,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+
+	"github.com/Einlanzerous/trestle/internal/durable"
 )
 
 // ErrNotFound is returned by Open for a hash the store does not hold.
@@ -56,18 +59,39 @@ func ValidHash(s string) bool {
 //
 //	<root>/blobs/<hh>/<sha256>
 //	<root>/tmp/<random>
+//
+// A committed blob is durable: its file, its directory entry in blobs/<hh>/
+// and that shard's entry in blobs/ are all on stable storage before Commit
+// returns (GENZO-30).
 type Local struct {
 	blobs string
 	tmp   string
+	fs    durable.FS
+
+	mu sync.Mutex
+	// shards holds every blobs/<hh> whose entry in blobs/ this process has
+	// fsynced. A shard found on disk may have been created by a process that
+	// died before syncing blobs/, so the first commit into each shard in a
+	// process syncs blobs/ once: at most 256 extra fsyncs per process.
+	shards map[string]bool
 }
 
 // NewLocal creates the directories it needs under root.
-func NewLocal(root string) (*Local, error) {
-	l := &Local{blobs: filepath.Join(root, "blobs"), tmp: filepath.Join(root, "tmp")}
+func NewLocal(root string) (*Local, error) { return NewLocalFS(root, durable.OS{}) }
+
+// NewLocalFS is NewLocal with the filesystem calls that order durability
+// going through fsys; tests pass a recorder.
+func NewLocalFS(root string, fsys durable.FS) (*Local, error) {
+	l := &Local{blobs: filepath.Join(root, "blobs"), tmp: filepath.Join(root, "tmp"), fs: fsys, shards: map[string]bool{}}
 	for _, d := range []string{l.blobs, l.tmp} {
 		if err := os.MkdirAll(d, 0o750); err != nil {
 			return nil, fmt.Errorf("blob: %w", err)
 		}
+	}
+	// blobs/ may have just been created; its entry in root must be durable
+	// before a blob below it can be.
+	if err := fsys.SyncDir(root); err != nil {
+		return nil, fmt.Errorf("blob: %w", err)
 	}
 	return l, nil
 }
@@ -151,11 +175,15 @@ func (l *Local) Open(_ context.Context, hash string) (io.ReadSeekCloser, int64, 
 	return f, st.Size(), nil
 }
 
+// Delete unlinks the blob and does not fsync its shard. Every caller removes
+// the record first and makes that removal durable before calling Delete, so a
+// lost unlink brings back a record-less blob, which serve's boot reconcile
+// reclaims; it can never bring back a record whose blob is gone.
 func (l *Local) Delete(_ context.Context, hash string) error {
 	if !ValidHash(hash) {
 		return nil
 	}
-	if err := os.Remove(l.path(hash)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := l.fs.Remove(l.path(hash)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("blob: %w", err)
 	}
 	return nil
@@ -170,8 +198,10 @@ type localWriter struct {
 func (w *localWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
 
 // Commit is temp-file + rename, so a reader can only ever find a whole blob.
-// The fsync before the rename is what makes that true across a crash, not
-// just across a process exit.
+// The fsync before the rename makes the bytes durable; the fsync of the shard
+// after it makes the name durable, and the fsync of blobs/ the shard's own
+// name. Only then does Commit return, so a caller that answers after it never
+// reports a blob a power loss can take back (GENZO-30).
 func (w *localWriter) Commit(hash string) error {
 	if w.done {
 		return errors.New("blob: writer already finished")
@@ -183,7 +213,7 @@ func (w *localWriter) Commit(hash string) error {
 		_ = os.Remove(name)
 		return fmt.Errorf("blob: invalid hash")
 	}
-	if err := w.f.Sync(); err != nil {
+	if err := w.l.fs.SyncFile(w.f); err != nil {
 		_ = w.f.Close()
 		_ = os.Remove(name)
 		return fmt.Errorf("blob: %w", err)
@@ -193,19 +223,46 @@ func (w *localWriter) Commit(hash string) error {
 		return fmt.Errorf("blob: %w", err)
 	}
 	dst := w.l.path(hash)
+	shard := filepath.Dir(dst)
+	if err := w.l.ensureShard(shard); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
 	// Same hash, same bytes: an existing blob is already the answer, and
-	// leaving it alone keeps open readers on the inode they started with.
+	// leaving it alone keeps open readers on the inode they started with. It
+	// may have been renamed by a process that died before syncing, so the
+	// shard is synced either way.
 	if _, err := os.Stat(dst); err == nil {
-		return os.Remove(name)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		// The temp file is in tmp/, which serve purges at boot: its unlink
+		// needs no fsync.
+		if err := os.Remove(name); err != nil {
+			return fmt.Errorf("blob: %w", err)
+		}
+	} else if err := w.l.fs.Rename(name, dst); err != nil {
 		_ = os.Remove(name)
 		return fmt.Errorf("blob: %w", err)
 	}
-	if err := os.Rename(name, dst); err != nil {
-		_ = os.Remove(name)
+	if err := w.l.fs.SyncDir(shard); err != nil {
 		return fmt.Errorf("blob: %w", err)
 	}
+	return nil
+}
+
+// ensureShard creates blobs/<hh> if needed and, the first time this process
+// uses it, makes its entry in blobs/ durable.
+func (l *Local) ensureShard(shard string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.shards[shard] {
+		return nil
+	}
+	if err := l.fs.Mkdir(shard, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("blob: %w", err)
+	}
+	if err := l.fs.SyncDir(l.blobs); err != nil {
+		return fmt.Errorf("blob: %w", err)
+	}
+	l.shards[shard] = true
 	return nil
 }
 

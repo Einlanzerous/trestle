@@ -19,6 +19,9 @@ the storage layout or the serve headers.
 - `internal/config/` — env-only config, `TRESTLE_`-prefixed. No config files.
 - `internal/blob/` — the `Store` interface and the local-disk implementation.
   Keyed by SHA-256 hex, always. R2 slots in behind the same interface.
+- `internal/durable/` — the filesystem seam (renames, unlinks, file and
+  directory fsyncs) blob and index write through, so a 201 is durable;
+  `durabletest/` records the calls for order tests (GENZO-30).
 - `internal/index/` — the flat-file record index: one JSON per blob under
   `<data>/index/`, in memory at boot, atomic writes.
 - `internal/api/` — the HTTP surface: `/v1/*` (bearer-gated), `/m/*`

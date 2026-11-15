@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Einlanzerous/trestle/internal/durable"
 )
 
 var (
@@ -67,17 +69,34 @@ type Upload struct {
 // Index is safe for concurrent use. One mutex covers the map, the files and
 // the blob side-effects passed in as callbacks, so an upload, a delete and a
 // sweep of the same hash are serialised end to end.
+//
+// Every change is durable before the call that made it returns: a record
+// write is fsynced and so is index/ after its rename, and a removal fsyncs
+// index/ before the blob it guarded is deleted (GENZO-30). The in-memory map
+// changes only once the disk change is durable, so a failed fsync leaves the
+// map at the old state and a retry writes (and syncs) again.
 type Index struct {
 	dir  string
+	fs   durable.FS
 	mu   sync.Mutex
 	recs map[string]*Record
+	// stale holds every hash whose rename or unlink in index/ succeeded but
+	// whose fsync of index/ failed: disk may now differ from memory in either
+	// direction (a removed record still in memory, a rewritten one not yet
+	// in it). Add never answers from memory alone for such a hash; it
+	// rewrites and syncs the record, which clears it.
+	stale map[string]bool
 }
 
 // Open creates dir if needed and loads every record in it. A record that
 // does not parse refuses the boot rather than being skipped: writes are
 // atomic, so a bad file was put there by hand, and silently dropping it
 // would drop someone's ownership.
-func Open(dir string) (*Index, error) {
+func Open(dir string) (*Index, error) { return OpenFS(dir, durable.OS{}) }
+
+// OpenFS is Open with the filesystem calls that order durability going
+// through fsys; tests pass a recorder.
+func OpenFS(dir string, fsys durable.FS) (*Index, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("index: %w", err)
 	}
@@ -85,7 +104,7 @@ func Open(dir string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("index: %w", err)
 	}
-	ix := &Index{dir: dir, recs: map[string]*Record{}}
+	ix := &Index{dir: dir, fs: fsys, recs: map[string]*Record{}, stale: map[string]bool{}}
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
@@ -109,6 +128,17 @@ func Open(dir string) (*Index, error) {
 			return nil, fmt.Errorf("index: %s holds a record for %q", name, r.SHA256)
 		}
 		ix.recs[hash] = &r
+	}
+	// What was just loaded is what the index now answers from, and a process
+	// that died between a rename and its directory fsync can have left a
+	// record that is visible but not yet durable. Make it durable before
+	// answering from it, and make index/'s own entry durable in case it was
+	// just created.
+	if err := fsys.SyncDir(dir); err != nil {
+		return nil, fmt.Errorf("index: %w", err)
+	}
+	if err := fsys.SyncDir(filepath.Dir(dir)); err != nil {
+		return nil, fmt.Errorf("index: %w", err)
 	}
 	return ix, nil
 }
@@ -200,7 +230,7 @@ func (ix *Index) Add(u Upload, quota int64, now time.Time, commit func() error) 
 	if err := commit(); err != nil {
 		return Record{}, false, err
 	}
-	if existed && sameRecord(*cur, next) {
+	if existed && sameRecord(*cur, next) && !ix.stale[next.SHA256] {
 		return next.clone(), true, nil
 	}
 	if err := ix.writeLocked(next); err != nil {
@@ -244,9 +274,10 @@ func (ix *Index) usedLocked(owner string, now time.Time) int64 {
 }
 
 // Disown removes owner from hash's record. When the last owner goes, the
-// record file is removed and then onLast runs (under the lock) to delete the
-// blob: a crash between the two leaves an orphan blob, which costs disk,
-// rather than a record pointing at nothing.
+// record file is removed, index/ is fsynced, and only then does onLast run
+// (under the lock) to delete the blob: a crash or power loss between the two
+// leaves an orphan blob, which costs disk, rather than a record pointing at
+// nothing.
 func (ix *Index) Disown(hash, owner string, now time.Time, onLast func() error) error {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
@@ -270,22 +301,46 @@ func (ix *Index) Disown(hash, owner string, now time.Time, onLast func() error) 
 }
 
 // Sweep removes every record expired at now, calling del for each blob under
-// the lock so an upload of the same bytes cannot land in between. It keeps
-// going past a failing del and returns the first error with what it removed.
+// the lock so an upload of the same bytes cannot land in between. The record
+// files are unlinked first and index/ is fsynced once for all of them, before
+// any blob is deleted: a power loss can then bring back a blob without its
+// record (an orphan reconcile reclaims), never a record without its blob. It
+// keeps going past a failing unlink or del and returns the first error with
+// what it removed.
 func (ix *Index) Sweep(now time.Time, del func(hash string) error) ([]Record, error) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	var removed []Record
+	var unlinked []string
 	var first error
 	for hash, r := range ix.recs {
 		if !r.Expired(now) {
 			continue
 		}
-		if err := ix.removeLocked(hash); err != nil {
+		if err := ix.unlinkLocked(hash); err != nil {
 			first = firstErr(first, err)
 			continue
 		}
-		removed = append(removed, r.clone())
+		unlinked = append(unlinked, hash)
+	}
+	if len(unlinked) == 0 {
+		return nil, first
+	}
+	if err := ix.fs.SyncDir(ix.dir); err != nil {
+		// Nothing is known durable: keep the records in memory and every
+		// blob on disk; the next sweep unlinks (a no-op) and syncs again.
+		for _, hash := range unlinked {
+			ix.stale[hash] = true
+		}
+		return nil, firstErr(first, fmt.Errorf("index: %w", err))
+	}
+	// Deterministic order, so the blob deletes are as predictable as the
+	// record unlinks were not (map order) and the test can assert them.
+	slices.Sort(unlinked)
+	removed := make([]Record, 0, len(unlinked))
+	for _, hash := range unlinked {
+		removed = append(removed, ix.recs[hash].clone())
+		delete(ix.recs, hash)
+		delete(ix.stale, hash)
 		if err := del(hash); err != nil {
 			first = firstErr(first, err)
 		}
@@ -302,8 +357,9 @@ func firstErr(first, err error) error {
 
 func (ix *Index) file(hash string) string { return filepath.Join(ix.dir, hash+".json") }
 
-// writeLocked is temp-file + fsync + rename, so a crash leaves either the old
-// record or the new one, never half of either.
+// writeLocked is temp-file + fsync + rename + fsync of index/, so a crash
+// leaves either the old record or the new one, never half of either, and a
+// power loss after it returns cannot bring back the old one.
 func (ix *Index) writeLocked(r Record) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -316,25 +372,49 @@ func (ix *Index) writeLocked(r Record) error {
 	tmp := f.Name()
 	_, err = f.Write(append(b, '\n'))
 	if err == nil {
-		err = f.Sync()
+		err = ix.fs.SyncFile(f)
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp, ix.file(r.SHA256))
+		err = ix.fs.Rename(tmp, ix.file(r.SHA256))
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("index: %w", err)
 	}
+	// After a failure here the new record is on disk (it would load at the
+	// next boot) but not in memory: the hash is stale until a write or
+	// removal of it syncs.
+	if err := ix.fs.SyncDir(ix.dir); err != nil {
+		ix.stale[r.SHA256] = true
+		return fmt.Errorf("index: %w", err)
+	}
+	delete(ix.stale, r.SHA256)
 	return nil
 }
 
+// removeLocked unlinks hash's record and makes the unlink durable before
+// dropping it from memory, so the caller may then delete the blob.
 func (ix *Index) removeLocked(hash string) error {
-	if err := os.Remove(ix.file(hash)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := ix.unlinkLocked(hash); err != nil {
+		return err
+	}
+	if err := ix.fs.SyncDir(ix.dir); err != nil {
+		// The record may be gone from disk while memory still answers for
+		// it; a re-upload must rewrite it, not find it unchanged.
+		ix.stale[hash] = true
 		return fmt.Errorf("index: %w", err)
 	}
 	delete(ix.recs, hash)
+	delete(ix.stale, hash)
+	return nil
+}
+
+func (ix *Index) unlinkLocked(hash string) error {
+	if err := ix.fs.Remove(ix.file(hash)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("index: %w", err)
+	}
 	return nil
 }
